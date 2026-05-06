@@ -1,0 +1,1 @@
+export default function AiSearchPage() { return <div className="rounded-3xl border border-slate-200/70 bg-white/75 p-8 dark:border-slate-800 dark:bg-slate-950/70"><h1 className="text-3xl font-black">AI Search</h1><p className="mt-3 text-slate-600 dark:text-slate-400">Gemini server route foundations are in place for scoped query parsing and manifest summaries.</p></div>; }

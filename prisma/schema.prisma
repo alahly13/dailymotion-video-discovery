@@ -1,0 +1,17 @@
+generator client { provider = "prisma-client-js" }
+datasource db { provider = "sqlite" url = env("DATABASE_URL") }
+
+model SavedVideo {
+  id          String   @id
+  platform    String
+  url         String?
+  title       String
+  description String?
+  thumbnail   String?
+  duration    Int?
+  views       Int?
+  language    String?
+  createdAt   DateTime?
+  savedAt     DateTime @default(now())
+  rawJson      String?
+}

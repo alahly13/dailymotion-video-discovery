@@ -1,0 +1,1 @@
+export const AI_SAFETY_PROMPT = `You work only with real public metadata already fetched by the application. Do not invent videos, IDs, URLs, channels, or counts. Return concise JSON when asked for filters.`;

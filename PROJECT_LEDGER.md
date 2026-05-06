@@ -92,3 +92,14 @@
   - `npm run db:validate` with placeholder Session Pooler env vars: passed.
   - `npm run typecheck`: failed due to pre-existing TypeScript issues unrelated to this DB connection strategy change.
   - `npm run db:status` and `npm run db:apply`: not run here due to missing real database credentials/access in this environment.
+
+## 2026-05-06 — UI/UX design system refresh with warm dual-theme foundation
+
+- Audited existing app shell, page surfaces, cards, form controls, and Channel Explorer hierarchy before implementation.
+- Replaced cool/blue-heavy surface defaults with a coherent warm token system in `src/app/globals.css` using CSS variables for background layers, foreground, muted text, border, accent, and focus ring.
+- Added a reliable client theme toggle plus no-flash bootstrapping script in `src/app/layout.tsx` and `src/components/layout/theme-toggle.tsx` with localStorage persistence and system preference fallback.
+- Refined top navigation and overall shell spacing/visual rhythm in `src/components/layout/app-shell.tsx`.
+- Upgraded foundational UI primitives (`Card`, `Button`, `Input`) to use shared tokenized styling for consistent radius, borders, shadows, and focus states.
+- Redesigned `VideoCard` presentation with stronger hierarchy, cleaner metadata grouping, calmer hover treatment, and improved scannability.
+- Polished key page shells (`/`, `/search`, `/saved`, and Channel Explorer heading/summary zone) for clearer hierarchy and calmer spacing.
+- No platform logic or API behavior was changed.

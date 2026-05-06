@@ -21,6 +21,19 @@ const publicSchema = z.object({
   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: z.string().min(1),
 });
 
+
+const isBuildTime = process.env.NEXT_PHASE === "phase-production-build";
+
+function parseOrStub<T>(schema: z.ZodType<T>, values: unknown, stub: T, scope: string): T {
+  const parsed = schema.safeParse(values);
+  if (parsed.success) return parsed.data;
+  if (isBuildTime) {
+    console.warn(`⚠️ Skipping strict ${scope} env validation during Next.js production build.`);
+    return stub;
+  }
+  throw parsed.error;
+}
+
 const optionalServerSchema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
   DAILYMOTION_API_BASE_URL: z.string().url().default("https://api.dailymotion.com"),
@@ -43,8 +56,16 @@ function isSupabaseDirectHost(raw: string) {
   }
 }
 
-export const serverEnv = requiredServerSchema.parse(process.env);
-export const publicEnv = publicSchema.parse(process.env);
+export const serverEnv = parseOrStub(requiredServerSchema, process.env, {
+  DATABASE_URL: "postgresql://build:build@localhost:5432/build",
+  DIRECT_URL: "postgresql://build:build@localhost:5432/build",
+  GEMINI_API_KEY: "build-placeholder",
+}, "server");
+export const publicEnv = parseOrStub(publicSchema, process.env, {
+  NEXT_PUBLIC_APP_URL: "https://example.com",
+  NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "build-placeholder",
+}, "public");
 export const optionalServerEnv = optionalServerSchema.parse(process.env);
 
 if (isSupabaseDirectHost(serverEnv.DIRECT_URL)) {

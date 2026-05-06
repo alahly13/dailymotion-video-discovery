@@ -1,17 +1,16 @@
 "use client";
 
-import { Layers3, Search, Square, WandSparkles } from "lucide-react";
+import { Square, WandSparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
-export function ChannelInputPanel({ value, loading, onChange, onAnalyze, onFetchFirst, onFetchAll, onStop }: {
+export function ChannelInputPanel({ value, loading, canStop, onChange, onAnalyze, onStop }: {
   value: string;
   loading: boolean;
+  canStop: boolean;
   onChange: (value: string) => void;
   onAnalyze: () => void;
-  onFetchFirst: () => void;
-  onFetchAll: () => void;
   onStop: () => void;
 }) {
   return (
@@ -28,15 +27,7 @@ export function ChannelInputPanel({ value, loading, onChange, onAnalyze, onFetch
           <WandSparkles className="h-4 w-4" aria-hidden="true" />
           Analyze
         </Button>
-        <Button type="button" onClick={onFetchFirst} disabled={loading}>
-          <Search className="h-4 w-4" aria-hidden="true" />
-          Fetch First Page
-        </Button>
-        <Button type="button" onClick={onFetchAll} disabled={loading}>
-          <Layers3 className="h-4 w-4" aria-hidden="true" />
-          Fetch All
-        </Button>
-        <Button type="button" variant="danger" onClick={onStop} disabled={!loading}>
+        <Button type="button" variant="danger" onClick={onStop} disabled={!canStop}>
           <Square className="h-4 w-4" aria-hidden="true" />
           Stop
         </Button>

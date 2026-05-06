@@ -1,0 +1,617 @@
+import { createChannelManifest } from "@/lib/manifests/channel-manifest";
+import type {
+  ChannelCoverage,
+  ChannelFetchCompletenessStatus,
+  ChannelFetchJobSnapshot,
+  ChannelFetchSettings,
+  ChannelSourceMetadata,
+  CoverageConfidence,
+  FetchHistoryEntry,
+  FetchJobStatus,
+  FetchPageAttemptSummary,
+  FetchWindowStatus,
+  FetchWindowSummary,
+  TimeWindowUnit,
+} from "@/types/channel-fetch";
+import type { ChannelManifest, ManifestFetchStatus } from "@/types/manifest";
+import type { NormalizedVideoMetadata } from "@/types/video";
+import { fetchDailymotionChannelPage } from "./dailymotion-client";
+import { fetchDailymotionSourceMetadata } from "./channel-metadata-service";
+import { resolveChannelFetchSettings } from "./channel-fetch-settings";
+import { analyzeDailymotionChannelInput, type DailymotionChannelAnalysis } from "./dailymotion-url-analyzer";
+
+const PROVIDER_WINDOW_ITEM_CAP = 1000;
+const DEFAULT_HISTORY_LIMIT = 25;
+
+type RuntimePersistence = "runtime-memory";
+
+interface RuntimeFetchWindow extends FetchWindowSummary {
+  pageStart: number;
+}
+
+interface RuntimeFetchJob {
+  id: string;
+  sourceKey: string;
+  analysis: DailymotionChannelAnalysis;
+  settings: ChannelFetchSettings;
+  metadata: ChannelSourceMetadata | null;
+  status: FetchJobStatus;
+  completenessStatus: ChannelFetchCompletenessStatus;
+  items: NormalizedVideoMetadata[];
+  seenVideoIds: Set<string>;
+  windows: RuntimeFetchWindow[];
+  pageAttempts: FetchPageAttemptSummary[];
+  currentWindowId: string | null;
+  pagesFetched: number;
+  windowsProcessed: number;
+  duplicateCount: number;
+  cappedWindowCount: number;
+  failedWindowCount: number;
+  maxItemsReached: boolean;
+  partialManifestPreserved: boolean;
+  resumable: boolean;
+  startedAt: string | null;
+  completedAt: string | null;
+  stoppedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+  lastError: string | null;
+  lastSuccessfulCheckpoint: string | null;
+}
+
+const jobs = new Map<string, RuntimeFetchJob>();
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function addHours(date: Date, hours: number) {
+  const next = new Date(date);
+  next.setUTCHours(next.getUTCHours() + hours);
+  return next;
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function sourceKeyForAnalysis(analysis: DailymotionChannelAnalysis) {
+  return `${analysis.sourceType}:${analysis.resolvedIdentifier}`.toLowerCase();
+}
+
+export function sourceKeyFromInput(input: string) {
+  return sourceKeyForAnalysis(analyzeDailymotionChannelInput(input));
+}
+
+function dateAtUtcStart(value: string) {
+  return new Date(`${value}T00:00:00.000Z`);
+}
+
+function dateAtUtcEnd(value: string) {
+  return new Date(`${value}T23:59:59.000Z`);
+}
+
+function addUnit(date: Date, unit: Exclude<TimeWindowUnit, "all">) {
+  const next = new Date(date);
+  if (unit === "year") next.setUTCFullYear(next.getUTCFullYear() + 1);
+  if (unit === "month") next.setUTCMonth(next.getUTCMonth() + 1);
+  if (unit === "week") next.setUTCDate(next.getUTCDate() + 7);
+  if (unit === "day") next.setUTCDate(next.getUTCDate() + 1);
+  return next;
+}
+
+function nextSplitUnit(unit: TimeWindowUnit): Exclude<TimeWindowUnit, "all"> | null {
+  if (unit === "year") return "month";
+  if (unit === "month") return "week";
+  if (unit === "week") return "day";
+  return null;
+}
+
+function unitRank(unit: Exclude<TimeWindowUnit, "all">) {
+  return { year: 0, month: 1, week: 2, day: 3 }[unit];
+}
+
+function providerMaxPage(pageSize: number) {
+  return Math.max(1, Math.ceil(PROVIDER_WINDOW_ITEM_CAP / Math.max(pageSize, 1)));
+}
+
+function windowId() {
+  return `window-${crypto.randomUUID()}`;
+}
+
+function buildWindow(unit: TimeWindowUnit, depth: number, windowStart: string | null, windowEnd: string | null, parentWindowId: string | null = null): RuntimeFetchWindow {
+  return {
+    id: windowId(),
+    parentWindowId,
+    status: "pending",
+    windowStart,
+    windowEnd,
+    unit,
+    depth,
+    pageStart: 1,
+    nextPageToFetch: 1,
+    pagesFetched: 0,
+    itemsFound: 0,
+    uniqueItemsAdded: 0,
+    duplicateItemsFound: 0,
+    reachedProviderCap: false,
+    hasMoreAtEnd: null,
+    errorMessage: null,
+    startedAt: null,
+    completedAt: null,
+  };
+}
+
+function generateWindows(settings: ChannelFetchSettings) {
+  if (settings.initialWindowUnit === "all" || settings.fetchProfile === "quick-preview" || settings.fetchProfile === "standard-fetch") {
+    return [buildWindow("all", 0, null, null)];
+  }
+
+  const unit = settings.initialWindowUnit as Exclude<TimeWindowUnit, "all">;
+  const start = settings.fromDate ? dateAtUtcStart(settings.fromDate) : dateAtUtcStart("2005-01-01");
+  const end = settings.toDate ? dateAtUtcEnd(settings.toDate) : new Date();
+  const windows: RuntimeFetchWindow[] = [];
+  let cursor = new Date(start);
+
+  // Planned windows are deterministic, non-overlapping UTC ranges. Future DB
+  // persistence should store these exact boundaries so resume can prove which
+  // catalog slices completed, capped, or failed.
+  while (cursor <= end && windows.length < settings.maxWindows) {
+    const next = addUnit(cursor, unit);
+    const windowEnd = new Date(Math.min(next.getTime() - 1000, end.getTime()));
+    windows.push(buildWindow(unit, 0, cursor.toISOString(), windowEnd.toISOString()));
+    cursor = next;
+  }
+
+  return windows.reverse();
+}
+
+function splitWindow(window: RuntimeFetchWindow, settings: ChannelFetchSettings, maxDepth: number) {
+  const childUnit = nextSplitUnit(window.unit);
+  if (!childUnit || !window.windowStart || !window.windowEnd) return [];
+  if (window.depth + 1 > maxDepth) return [];
+  if (unitRank(childUnit) > unitRank(settings.minimumSplitUnit)) return [];
+
+  const start = new Date(window.windowStart);
+  const end = new Date(window.windowEnd);
+  const children: RuntimeFetchWindow[] = [];
+  let cursor = new Date(start);
+
+  while (cursor <= end) {
+    const next = addUnit(cursor, childUnit);
+    const childEnd = new Date(Math.min(next.getTime() - 1000, end.getTime()));
+    children.push(buildWindow(childUnit, window.depth + 1, cursor.toISOString(), childEnd.toISOString(), window.id));
+    cursor = next;
+  }
+
+  return children.reverse();
+}
+
+function requestWindowParams(window: RuntimeFetchWindow) {
+  const params: Record<string, number> = {};
+  if (window.windowStart) params.created_after = Math.floor(new Date(window.windowStart).getTime() / 1000);
+  if (window.windowEnd) params.created_before = Math.floor(new Date(window.windowEnd).getTime() / 1000);
+  return params;
+}
+
+function mergeVideos(job: RuntimeFetchJob, videos: NormalizedVideoMetadata[]) {
+  let uniqueAdded = 0;
+  let duplicates = 0;
+
+  for (const video of videos) {
+    if (job.seenVideoIds.has(video.id)) {
+      duplicates += 1;
+      continue;
+    }
+    job.seenVideoIds.add(video.id);
+    job.items.push(video);
+    uniqueAdded += 1;
+    if (job.items.length >= job.settings.maxItems && job.settings.stopWhenMaxItemsReached) break;
+  }
+
+  job.duplicateCount += duplicates;
+  if (job.items.length >= job.settings.maxItems && job.settings.stopWhenMaxItemsReached) {
+    job.maxItemsReached = true;
+  }
+
+  return { uniqueAdded, duplicates };
+}
+
+function terminalStatus(status: FetchJobStatus) {
+  return ["complete", "capped", "stopped", "failed", "max_items_reached", "timeout_limited", "provider_limited", "auth_or_provider_limited"].includes(status);
+}
+
+function manifestStatusFor(status: FetchJobStatus): ManifestFetchStatus {
+  if (status === "complete") return "complete";
+  if (status === "capped") return "capped";
+  if (status === "stopped") return "stopped";
+  if (status === "failed") return "failed";
+  if (status === "max_items_reached") return "max_items_reached";
+  if (status === "provider_limited") return "provider_limited";
+  if (status === "auth_or_provider_limited") return "auth_or_provider_limited";
+  if (status === "timeout_limited") return "timeout_limited";
+  if (status === "partial") return "partial";
+  return "fetching";
+}
+
+function calculateCompleteness(job: RuntimeFetchJob): ChannelFetchCompletenessStatus {
+  if (job.status === "stopped") return "stopped";
+  if (job.status === "failed") return "failed";
+  if (job.status === "max_items_reached" || job.maxItemsReached) return "max_items_reached";
+  if (job.status === "timeout_limited") return "timeout_limited";
+  if (job.status === "provider_limited") return "provider_limited";
+  if (job.status === "auth_or_provider_limited") return "auth_or_provider_limited";
+  if (job.cappedWindowCount > 0) return "capped";
+  if (job.failedWindowCount > 0) return "partial";
+  if (job.windows.some((window) => window.status === "pending" || window.status === "running")) return "partial";
+  if (job.windows.length > 0 && job.windows.every((window) => window.status === "complete" || window.status === "split")) return "complete";
+  return "unknown";
+}
+
+function coverageConfidence(status: ChannelFetchCompletenessStatus, reportedTotal: number | null, collected: number): CoverageConfidence {
+  if (status === "complete" && reportedTotal !== null && collected >= reportedTotal) return "high";
+  if (status === "complete") return "medium";
+  if (status === "partial" || status === "capped") return "low";
+  return "unknown";
+}
+
+function buildCoverage(job: RuntimeFetchJob): ChannelCoverage {
+  const reportedTotal = job.metadata?.reportedTotalFromApi ?? null;
+  const collected = job.items.length;
+  const estimatedRemaining = reportedTotal !== null ? Math.max(reportedTotal - collected, 0) : null;
+  const coveragePercent = reportedTotal && reportedTotal > 0 ? Math.min(100, Number(((collected / reportedTotal) * 100).toFixed(2))) : null;
+  const pendingWindowCount = job.windows.filter((window) => window.status === "pending" || window.status === "running").length;
+  const completedWindowCount = job.windows.filter((window) => window.status === "complete").length;
+  const completenessStatus = calculateCompleteness(job);
+
+  return {
+    reportedTotalFromApi: reportedTotal,
+    reportedTotalCheckedAt: job.metadata?.reportedTotalCheckedAt ?? null,
+    collectedUniqueVideos: collected,
+    estimatedRemainingVideos: estimatedRemaining,
+    coveragePercent,
+    coverageStatus: completenessStatus,
+    coverageConfidence: coverageConfidence(completenessStatus, reportedTotal, collected),
+    cappedWindowCount: job.cappedWindowCount,
+    failedWindowCount: job.failedWindowCount,
+    completedWindowCount,
+    pendingWindowCount,
+    latestSuccessfulCheckpoint: job.lastSuccessfulCheckpoint,
+    lastResumePoint: job.currentWindowId,
+    warning:
+      completenessStatus === "complete"
+        ? null
+        : "Full channel coverage is only confirmed when every planned time window completes without caps or failures.",
+  };
+}
+
+function buildManifest(job: RuntimeFetchJob): ChannelManifest {
+  const completenessStatus = calculateCompleteness(job);
+  return createChannelManifest({
+    sourceType: job.analysis.sourceType,
+    sourceInput: job.analysis.sourceInput,
+    resolvedChannelId: job.analysis.resolvedIdentifier,
+    resolvedChannelName: job.metadata?.displayName ?? job.analysis.displayLabel,
+    requestId: job.id,
+    items: job.items,
+    totalKnownItems: job.metadata?.reportedTotalFromApi ?? null,
+    pagesFetched: job.pagesFetched,
+    totalWindowsProcessed: job.windowsProcessed,
+    cappedWindowCount: job.cappedWindowCount,
+    failedWindowCount: job.failedWindowCount,
+    duplicateCount: job.duplicateCount,
+    completenessStatus,
+    fetchSettings: job.settings,
+    sourceMetadata: job.metadata,
+    fetchJobId: job.id,
+    isComplete: completenessStatus === "complete",
+    isPartial: completenessStatus !== "complete",
+  });
+}
+
+function buildHistoryEntry(job: RuntimeFetchJob): FetchHistoryEntry {
+  return {
+    id: job.id,
+    sourceKey: job.sourceKey,
+    fetchProfile: job.settings.fetchProfile,
+    status: job.status,
+    completenessStatus: calculateCompleteness(job),
+    startedAt: job.startedAt,
+    completedAt: job.completedAt,
+    stoppedAt: job.stoppedAt,
+    updatedAt: job.updatedAt,
+    uniqueItemsCollected: job.items.length,
+    pagesFetched: job.pagesFetched,
+    windowsProcessed: job.windowsProcessed,
+    cappedWindowCount: job.cappedWindowCount,
+    failedWindowCount: job.failedWindowCount,
+    resumable: job.resumable && terminalStatus(job.status) && job.status !== "complete",
+    persistence: "runtime-memory",
+  };
+}
+
+function buildProgress(job: RuntimeFetchJob) {
+  const currentWindow = job.currentWindowId ? job.windows.find((window) => window.id === job.currentWindowId) ?? null : null;
+  return {
+    fetchProfile: job.settings.fetchProfile,
+    status: job.status,
+    completenessStatus: calculateCompleteness(job),
+    pagesFetched: job.pagesFetched,
+    windowsProcessed: job.windowsProcessed,
+    windowsQueued: job.windows.filter((window) => window.status === "pending" || window.status === "running").length,
+    itemsCollected: job.items.length + job.duplicateCount,
+    uniqueItemsCollected: job.items.length,
+    duplicateCount: job.duplicateCount,
+    cappedWindowCount: job.cappedWindowCount,
+    failedWindowCount: job.failedWindowCount,
+    currentWindow,
+    maxItemsReached: job.maxItemsReached,
+    partialManifestPreserved: job.partialManifestPreserved,
+    resumable: job.resumable,
+  };
+}
+
+function snapshot(job: RuntimeFetchJob): ChannelFetchJobSnapshot {
+  job.completenessStatus = calculateCompleteness(job);
+  return {
+    id: job.id,
+    sourceKey: job.sourceKey,
+    status: job.status,
+    completenessStatus: job.completenessStatus,
+    settings: job.settings,
+    metadata: job.metadata,
+    progress: buildProgress(job),
+    coverage: buildCoverage(job),
+    manifest: buildManifest(job),
+    historyEntry: buildHistoryEntry(job),
+    windows: job.windows,
+    recentPageAttempts: job.pageAttempts.slice(-10),
+    persistence: "runtime-memory",
+  };
+}
+
+function cleanupExpiredJobs() {
+  const now = Date.now();
+  for (const [id, job] of jobs) {
+    if (Date.parse(job.expiresAt) < now) jobs.delete(id);
+  }
+}
+
+function finishJob(job: RuntimeFetchJob, status: FetchJobStatus) {
+  job.status = status;
+  job.completenessStatus = calculateCompleteness(job);
+  job.completedAt = nowIso();
+  job.updatedAt = job.completedAt;
+  job.currentWindowId = null;
+}
+
+function maybeFinishWhenNoPending(job: RuntimeFetchJob) {
+  if (job.maxItemsReached) {
+    finishJob(job, "max_items_reached");
+    return;
+  }
+
+  if (job.pagesFetched >= job.settings.maxTotalPages && job.windows.some((window) => window.status === "pending" || window.status === "running")) {
+    finishJob(job, "partial");
+    return;
+  }
+
+  const unfinished = job.windows.some((window) => window.status === "pending" || window.status === "running");
+  if (!unfinished) {
+    finishJob(job, job.cappedWindowCount > 0 ? "capped" : job.failedWindowCount > 0 ? "partial" : "complete");
+  }
+}
+
+export async function startChannelFetchJob(input: string, rawSettings: unknown, requestId?: string, signal?: AbortSignal) {
+  cleanupExpiredJobs();
+  const { settings, caps } = resolveChannelFetchSettings(rawSettings);
+
+  if (settings.resumeJobId) {
+    const existing = jobs.get(settings.resumeJobId);
+    if (existing?.resumable) {
+      existing.status = "running";
+      existing.stoppedAt = null;
+      existing.updatedAt = nowIso();
+      return { job: snapshot(existing), caps };
+    }
+  }
+
+  const analysis = analyzeDailymotionChannelInput(input);
+  const metadataResult = await fetchDailymotionSourceMetadata(analysis, signal);
+  const metadata = metadataResult.metadata ?? null;
+  const now = nowIso();
+  const id = requestId ?? crypto.randomUUID();
+  const sourceKey = sourceKeyForAnalysis(analysis);
+  const initialWindows = generateWindows(settings).slice(0, settings.maxWindows);
+
+  const job: RuntimeFetchJob = {
+    id,
+    sourceKey,
+    analysis,
+    settings,
+    metadata,
+    status: "running",
+    completenessStatus: "partial",
+    items: [],
+    seenVideoIds: new Set(),
+    windows: initialWindows,
+    pageAttempts: [],
+    currentWindowId: null,
+    pagesFetched: 0,
+    windowsProcessed: 0,
+    duplicateCount: 0,
+    cappedWindowCount: 0,
+    failedWindowCount: 0,
+    maxItemsReached: false,
+    partialManifestPreserved: settings.preservePartialManifest,
+    resumable: true,
+    startedAt: now,
+    completedAt: null,
+    stoppedAt: null,
+    createdAt: now,
+    updatedAt: now,
+    expiresAt: addHours(new Date(), caps.jobTtlHours).toISOString(),
+    lastError: metadataResult.ok ? null : metadataResult.error ?? "Metadata unavailable.",
+    lastSuccessfulCheckpoint: null,
+  };
+
+  jobs.set(id, job);
+  return { job: snapshot(job), caps };
+}
+
+export async function processNextChannelFetchChunk(jobId: string, signal?: AbortSignal) {
+  cleanupExpiredJobs();
+  const job = jobs.get(jobId);
+  if (!job) throw new Error("Fetch job was not found or has expired.");
+  if (terminalStatus(job.status) && job.status !== "stopped" && job.status !== "failed" && job.status !== "partial") {
+    return snapshot(job);
+  }
+
+  job.status = "running";
+  job.updatedAt = nowIso();
+
+  const window = job.windows.find((candidate) => candidate.status === "running") ?? job.windows.find((candidate) => candidate.status === "pending");
+  if (!window) {
+    maybeFinishWhenNoPending(job);
+    return snapshot(job);
+  }
+
+  if (job.pagesFetched >= job.settings.maxTotalPages) {
+    finishJob(job, "partial");
+    return snapshot(job);
+  }
+
+  if (job.windowsProcessed >= job.settings.maxWindows && window.status === "pending") {
+    finishJob(job, "partial");
+    return snapshot(job);
+  }
+
+  window.status = "running";
+  window.startedAt ??= nowIso();
+  job.currentWindowId = window.id;
+
+  const pageNumber = window.nextPageToFetch;
+  const requestParams = requestWindowParams(window);
+  const attempt: FetchPageAttemptSummary = {
+    id: `attempt-${crypto.randomUUID()}`,
+    fetchWindowId: window.id,
+    pageNumber,
+    limit: job.settings.pageSize,
+    status: "success",
+    itemsReturned: 0,
+    uniqueItemsAdded: 0,
+    duplicateItemsFound: 0,
+    hasMore: false,
+    requestedAt: nowIso(),
+    completedAt: null,
+  };
+
+  const page = await fetchDailymotionChannelPage(job.analysis.apiPath, pageNumber, job.settings.pageSize, signal, requestParams);
+  attempt.completedAt = nowIso();
+
+  if (!page.ok || !page.data) {
+    attempt.status = page.reason === "rate_limited" ? "rate_limited" : page.reason === "unauthorized" ? "auth_or_provider_limited" : "failed";
+    window.status = page.reason === "unauthorized" ? "failed" : "failed";
+    window.errorMessage = page.error ?? "Dailymotion page request failed.";
+    window.completedAt = nowIso();
+    job.failedWindowCount += 1;
+    job.lastError = window.errorMessage;
+    job.status = page.reason === "unauthorized" ? "auth_or_provider_limited" : page.reason === "rate_limited" ? "provider_limited" : "failed";
+    job.pageAttempts.push(attempt);
+    job.updatedAt = nowIso();
+    return snapshot(job);
+  }
+
+  attempt.itemsReturned = page.data.items.length;
+  attempt.hasMore = page.data.hasMore;
+  const merge = mergeVideos(job, page.data.items);
+  attempt.uniqueItemsAdded = merge.uniqueAdded;
+  attempt.duplicateItemsFound = merge.duplicates;
+  job.pageAttempts.push(attempt);
+
+  window.pagesFetched += 1;
+  window.itemsFound += page.data.items.length;
+  window.uniqueItemsAdded += merge.uniqueAdded;
+  window.duplicateItemsFound += merge.duplicates;
+  window.hasMoreAtEnd = page.data.hasMore;
+  job.pagesFetched += 1;
+  job.lastSuccessfulCheckpoint = `${window.id}:page:${pageNumber}`;
+
+  const reachedProviderCap = page.data.hasMore && (pageNumber >= providerMaxPage(job.settings.pageSize) || window.itemsFound >= PROVIDER_WINDOW_ITEM_CAP);
+  const reachedJobCaps = job.maxItemsReached || job.pagesFetched >= job.settings.maxTotalPages;
+
+  if (reachedProviderCap) {
+    window.reachedProviderCap = true;
+    const childWindows = job.settings.autoSplitCappedWindows ? splitWindow(window, job.settings, resolveChannelFetchSettings(job.settings).caps.maxWindowDepth) : [];
+    if (childWindows.length > 0 && job.windows.length + childWindows.length <= job.settings.maxWindows) {
+      window.status = "split";
+      window.completedAt = nowIso();
+      job.windowsProcessed += 1;
+      job.windows.splice(job.windows.indexOf(window) + 1, 0, ...childWindows);
+    } else {
+      window.status = "capped";
+      window.completedAt = nowIso();
+      job.windowsProcessed += 1;
+      job.cappedWindowCount += 1;
+      if (job.settings.stopOnCappedWindow) finishJob(job, "capped");
+    }
+  } else if (page.data.hasMore && !reachedJobCaps) {
+    window.nextPageToFetch = pageNumber + 1;
+  } else if (page.data.hasMore && reachedJobCaps) {
+    window.status = "stopped";
+    window.completedAt = nowIso();
+    job.windowsProcessed += 1;
+    if (!job.maxItemsReached) finishJob(job, "partial");
+  } else {
+    window.status = "complete";
+    window.completedAt = nowIso();
+    job.windowsProcessed += 1;
+  }
+
+  if (job.maxItemsReached) finishJob(job, "max_items_reached");
+  else maybeFinishWhenNoPending(job);
+
+  job.updatedAt = nowIso();
+  if (!terminalStatus(job.status) && job.settings.delayMs > 0) await delay(job.settings.delayMs);
+  return snapshot(job);
+}
+
+export function stopChannelFetchJob(jobId: string) {
+  cleanupExpiredJobs();
+  const job = jobs.get(jobId);
+  if (!job) throw new Error("Fetch job was not found or has expired.");
+  const now = nowIso();
+  job.status = "stopped";
+  job.stoppedAt = now;
+  job.updatedAt = now;
+  job.currentWindowId = null;
+  const runningWindow = job.windows.find((window) => window.status === "running");
+  if (runningWindow) runningWindow.status = "pending";
+  return snapshot(job);
+}
+
+export function getChannelFetchJob(jobId: string) {
+  cleanupExpiredJobs();
+  const job = jobs.get(jobId);
+  return job ? snapshot(job) : null;
+}
+
+export function listChannelFetchHistory(sourceKey?: string, limit = DEFAULT_HISTORY_LIMIT): FetchHistoryEntry[] {
+  cleanupExpiredJobs();
+  return [...jobs.values()]
+    .filter((job) => !sourceKey || job.sourceKey === sourceKey)
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+    .slice(0, limit)
+    .map(buildHistoryEntry);
+}
+
+export function getLatestChannelCoverage(sourceKey: string): ChannelCoverage | null {
+  cleanupExpiredJobs();
+  const latest = [...jobs.values()]
+    .filter((job) => job.sourceKey === sourceKey)
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0];
+  return latest ? buildCoverage(latest) : null;
+}
+
+export const runtimeFetchPersistence: RuntimePersistence = "runtime-memory";

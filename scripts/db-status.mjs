@@ -4,12 +4,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { loadProjectEnv } from "./load-project-env.mjs";
+import { applyPrismaCommandConnectionDefaults } from "./prisma-command-env.mjs";
 
 loadProjectEnv();
 
 const shouldSkipValidation = process.argv.includes("--skip-validation");
 const shouldAllowStatusFailure = process.argv.includes("--allow-status-failure");
 const migrationsDir = path.join(process.cwd(), "prisma", "migrations");
+const prismaCliPath = path.join(process.cwd(), "node_modules", "prisma", "build", "index.js");
 
 function redact(text = "") {
   return String(text)
@@ -21,10 +23,16 @@ function writeOutput(text, stream = process.stdout) {
   if (text) stream.write(redact(text));
 }
 
+function resolveCommand(command) {
+  if (process.platform !== "win32") return command;
+  if (command === "npx") return "npx.cmd";
+  if (command === "npm") return "npm.cmd";
+  return command;
+}
+
 function run(command, args, options = {}) {
-  const result = spawnSync(command, args, {
+  const result = spawnSync(resolveCommand(command), args, {
     encoding: "utf8",
-    shell: process.platform === "win32",
     env: process.env,
     ...options,
   });
@@ -40,6 +48,29 @@ function run(command, args, options = {}) {
     status: typeof result.status === "number" ? result.status : result.error ? 1 : 0,
     output: `${result.stdout || ""}\n${result.stderr || ""}`,
   };
+}
+
+function runWithSingleP1001Retry(command, args, retryMessage, options = {}) {
+  let result = run(command, args, options);
+
+  // Supabase Session Pooler reachability can be transient even after a clean
+  // SELECT 1 preflight. Retry the exact Prisma engine operation once so the
+  // db:status diagnostic does not fail a deploy/apply path on a single bad
+  // pooler connection attempt.
+  if (result.status !== 0 && /P1001/.test(result.output)) {
+    console.warn(retryMessage);
+    result = run(command, args, options);
+  }
+
+  return result;
+}
+
+function runPrisma(args, options = {}) {
+  return run(process.execPath, [prismaCliPath, ...args], options);
+}
+
+function runPrismaWithSingleP1001Retry(args, retryMessage, options = {}) {
+  return runWithSingleP1001Retry(process.execPath, [prismaCliPath, ...args], retryMessage, options);
 }
 
 function runValidation() {
@@ -121,7 +152,7 @@ function runConnectivityPreflight() {
       console.warn("[WARN] Retrying connectivity preflight once after P1001 reachability failure.");
     }
 
-    lastResult = run("npx", ["prisma", "db", "execute", "--stdin"], { input: "SELECT 1;" });
+    lastResult = runPrisma(["db", "execute", "--stdin"], { input: "SELECT 1;" });
     if (lastResult.status === 0) return lastResult;
     if (!/P1001/.test(lastResult.output)) return lastResult;
   }
@@ -131,6 +162,7 @@ function runConnectivityPreflight() {
 
 function main() {
   if (!shouldSkipValidation) runValidation();
+  applyPrismaCommandConnectionDefaults();
 
   // Status is the diagnostic surface for the repo's Prisma migration workflow.
   // Keep migration-history warnings separate from connectivity so future agents
@@ -148,7 +180,10 @@ function main() {
   }
 
   console.log("[INFO] Checking Prisma migration status...");
-  const status = run("npx", ["prisma", "migrate", "status"]);
+  const status = runPrismaWithSingleP1001Retry(
+    ["migrate", "status"],
+    "[WARN] Retrying Prisma migration status once after P1001 reachability failure."
+  );
   let printedBaselineGuidance = false;
 
   if (status.status !== 0 && /Schema engine error:/i.test(status.output)) {

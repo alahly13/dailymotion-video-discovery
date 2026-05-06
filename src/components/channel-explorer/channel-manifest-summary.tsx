@@ -8,7 +8,10 @@ export function ChannelManifestSummary({ manifest }: { manifest: ChannelManifest
       <h2 className="text-lg font-bold">Current Channel Manifest</h2>
       <p className="mt-2 text-sm leading-6 text-[var(--muted-foreground)]">
         {manifest.resolvedChannelName ?? manifest.sourceInput} - {manifest.items.length} deduplicated public metadata records -{" "}
-        {manifest.isComplete ? "complete" : "partial"}
+        {manifest.completenessStatus ?? (manifest.isComplete ? "complete" : "partial")}
+      </p>
+      <p className="mt-2 text-sm leading-6 text-[var(--muted-foreground)]">
+        Reported totals are provider metadata, not guaranteed collectable-video counts. The original manifest items are preserved when result filters change.
       </p>
     </Card>
   );

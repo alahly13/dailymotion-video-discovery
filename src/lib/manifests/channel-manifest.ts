@@ -1,5 +1,6 @@
 import type { ChannelManifest, ChannelSourceType } from "@/types/manifest";
 import type { NormalizedVideoMetadata } from "@/types/video";
+import type { ChannelFetchCompletenessStatus, ChannelFetchSettings, ChannelSourceMetadata } from "@/types/channel-fetch";
 
 export function createChannelManifest(args: {
   sourceType: ChannelSourceType;
@@ -10,6 +11,14 @@ export function createChannelManifest(args: {
   items?: NormalizedVideoMetadata[];
   totalKnownItems?: number | null;
   pagesFetched?: number;
+  totalWindowsProcessed?: number;
+  cappedWindowCount?: number;
+  failedWindowCount?: number;
+  duplicateCount?: number;
+  completenessStatus?: ChannelFetchCompletenessStatus;
+  fetchSettings?: ChannelFetchSettings | null;
+  sourceMetadata?: ChannelSourceMetadata | null;
+  fetchJobId?: string | null;
   isComplete?: boolean;
   isPartial?: boolean;
 }): ChannelManifest {
@@ -25,6 +34,14 @@ export function createChannelManifest(args: {
     fetchStatus: args.isComplete ? "complete" : args.isPartial ? "partial" : "fetching",
     pagesFetched: args.pagesFetched ?? 0,
     totalKnownItems: args.totalKnownItems ?? null,
+    totalWindowsProcessed: args.totalWindowsProcessed ?? 0,
+    cappedWindowCount: args.cappedWindowCount ?? 0,
+    failedWindowCount: args.failedWindowCount ?? 0,
+    duplicateCount: args.duplicateCount ?? 0,
+    completenessStatus: args.completenessStatus ?? (args.isComplete ? "complete" : args.isPartial ? "partial" : "unknown"),
+    fetchSettings: args.fetchSettings ?? null,
+    sourceMetadata: args.sourceMetadata ?? null,
+    fetchJobId: args.fetchJobId ?? null,
     isComplete: args.isComplete ?? false,
     isPartial: args.isPartial ?? false,
     createdAt: now,

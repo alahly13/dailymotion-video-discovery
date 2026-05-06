@@ -1,8 +1,8 @@
 # Dailymotion Discovery Platform Ledger
 
-Updated: 2026-05-06
+Updated: 2026-05-07
 Repo path: `F:\discovery\dailymotion-video-discovery`
-Scope: Project source-of-truth ledger, updated after the 2026-05-06 Prisma schema-engine status diagnostic repair.
+Scope: Project source-of-truth ledger, updated after the 2026-05-06 dependency audit cleanup, Supabase P1001 hardening, and Prisma migration apply.
 
 ## Table of Contents
 
@@ -23,6 +23,266 @@ Scope: Project source-of-truth ledger, updated after the 2026-05-06 Prisma schem
 - [Known Limitations](#known-limitations)
 - [Future Roadmap](#future-roadmap)
 - [Agent Instructions](#agent-instructions)
+
+## 2026-05-07 Next.js Dependency Declaration and Lockfile Alignment
+
+**Scope**
+
+- Dependency-only maintenance for `package.json` and `package-lock.json`.
+- No Prisma, Supabase, Dailymotion, Gemini, migrations, UI, database, or application runtime logic was changed.
+
+**Dependency truth**
+
+- `package.json` declares `next` exactly as `^16.2.0`.
+- `package-lock.json` root dependency entry also declares `next` as `^16.2.0`.
+- The npm-resolved installed Next.js version is `16.2.5`.
+- The lockfile aligns Next.js transitive packages with `16.2.5`, including `@next/env` and the platform-specific `@next/swc-*` optional packages.
+
+**Commands run**
+
+- `npm install`: passed; npm reported the project was up to date and found `0` vulnerabilities.
+- `npm ls next`: passed; resolved `next@16.2.5`.
+- `npm run typecheck`: passed.
+- `npm run build`: passed on Next.js `16.2.5` after the existing application env preflight succeeded.
+
+**Safety notes**
+
+- Secrets were not intentionally printed.
+- `db:apply` was not run.
+- No database or migration command was run.
+
+## 2026-05-06 Dependency Audit Cleanup, Supabase P1001 Hardening, and Migration Apply
+
+**Official docs checked**
+
+- GitHub Advisory Database: PostCSS `GHSA-qx2v-qp2m-jg93` is fixed in `postcss@8.5.10`; this repo now resolves to `postcss@8.5.14`.
+- GitHub Advisory Database: `@hono/node-server` `GHSA-92pp-h63x-v22m` is fixed in `@hono/node-server@1.19.13`; this repo now resolves to `1.19.14`.
+- Supabase Prisma docs: Supavisor Session Pooler on port `5432` is the supported IPv4-friendly connection shape used by this repo's `DATABASE_URL`.
+- Supabase Prisma troubleshooting docs: `connect_timeout=30` is an accepted P1001 troubleshooting query parameter. The repo now applies it process-only for Prisma CLI child commands when the stored `DATABASE_URL` has no explicit timeout.
+- Prisma Supabase docs now also describe a `DIRECT_URL` split for some CLI workflows, but this repo's active instruction and current architecture continue to prohibit reintroducing `DIRECT_URL`; no direct host workflow was restored.
+- Local Next.js 16 docs under `node_modules/next/dist/docs/` were checked for current install/CLI behavior. The repo remains App Router/Proxy-aligned, and `next lint` is still a removed command that needs a future ESLint migration.
+
+**Files changed for this entry**
+
+- `package.json`
+- `package-lock.json`
+- `.env.example`
+- `README.md`
+- `PROJECT_LEDGER.md`
+- `dailymotion_discovery_ledger.md`
+- `scripts/db-status.mjs`
+- `scripts/db-apply.mjs`
+- `scripts/prisma-command-env.mjs`
+
+**Dependency audit truth**
+
+- `npm audit fix --force` was not used because the forced path proposed unsafe major-line downgrades instead of preserving the current stack.
+- `next` was patch-upgraded from `16.2.4` to `16.2.5`.
+- `prisma` and `@prisma/client` remain pinned to `7.8.0`; npm reports `7.8.0` as the latest stable Prisma release in this environment.
+- Added package overrides:
+  - `postcss@8.5.14`
+  - `@hono/node-server@1.19.14`
+- Current audit result: `npm audit` reports `0` vulnerabilities.
+
+**Database and migration truth**
+
+- Migration applied: yes.
+- Applied migration: `prisma/migrations/20260506_channel_deep_fetch_history_persistence_foundation/migration.sql`.
+- Current `npm run db:status`: reaches Prisma migration status and reports the database schema is up to date.
+- Canonical durable tables now applied in Supabase/Postgres: `video_sources`, `videos`, `collections`, `saved_videos`, and `source_catalog_snapshots`.
+- Temporary/operational tables now applied: `manifests`, `manifest_items`, `fetch_jobs`, `fetch_windows`, `fetch_page_attempts`, and `fetch_job_events`.
+- RLS is enabled by the migration on all new public-schema tables without broad public policies.
+- Current runtime code audit found no Prisma Client usage or table reads/writes in `src`; persistence is schema-applied but not wired into Channel Explorer repositories yet.
+- No old runtime tables, fallback reads, dual writes, or mixed database truth paths were found in current source code.
+- `DATABASE_URL` remains the only active database variable. `DIRECT_URL` was not restored.
+
+**Prisma/Supabase command hardening**
+
+- Added `scripts/prisma-command-env.mjs`.
+- `db:status` and `db:apply` now apply `connect_timeout=30` only to Prisma CLI child processes when `DATABASE_URL` does not already include `connect_timeout`.
+- `PRISMA_CONNECT_TIMEOUT_SECONDS` is optional and only controls that process-only Prisma CLI timeout default.
+- The stored env file and actual target URL are not rewritten.
+- DB scripts now call the local Prisma CLI JS entrypoint with `process.execPath` instead of invoking Prisma through `npx`/Windows shell argument concatenation.
+- `P1001` retry behavior remains fail-closed: the scripts retry narrow Prisma reachability failures once and still exit non-zero when the database cannot be reached.
+
+**Verification**
+
+- `npm audit`: passed with `0` vulnerabilities.
+- Script syntax checks: passed for `scripts/prisma-command-env.mjs`, `scripts/db-status.mjs`, and `scripts/db-apply.mjs`.
+- `npx prisma validate`: passed.
+- `npm run db:validate`: passed with sanitized Session Pooler metadata only.
+- `npm run db:status`: passed and reported "Database schema is up to date!".
+- `CONFIRM_DB_APPLY=true npm run db:apply`: applied the pending migration successfully.
+- Second `CONFIRM_DB_APPLY=true npm run db:apply`: passed as a no-op with no pending migrations.
+- `npx prisma generate`: passed and generated Prisma Client `7.8.0`.
+- `npm run typecheck`: passed.
+- `npm run build`: passed on Next.js `16.2.5`.
+- DNS/TCP diagnostic: `aws-0-eu-west-1.pooler.supabase.com` resolved and TCP checks to ports `5432` and `6543` succeeded from this machine.
+- `npm run lint`: still blocked because the existing script runs removed Next.js 16 command `next lint`, which Next interprets as an invalid project directory named `lint`.
+
+**Safety notes**
+
+- Secrets were not intentionally printed; DB scripts continued to redact raw URLs.
+- No `prisma migrate reset`, `prisma db push`, table drops, table deletes, or destructive DB repair commands were run.
+- No Dailymotion provider behavior, manifest filtering, AI routes, auth boundaries, or browser exposure of server secrets was changed.
+- The live database now has schema foundation tables, but product flows still use runtime/in-memory persistence until repositories are deliberately wired.
+
+## 2026-05-06 Channel Explorer Deep Fetch, Metadata, History, Coverage, and Persistence Foundation
+
+**Guide read confirmation**
+
+- `Guide-Files/dailymotion_channel_deep_fetch_persistence_guide_2026.md` was read before implementation and treated as target architecture, not current truth.
+- Current code was audited before edits. Where guide and code differed, current code stayed authoritative and the implementation extended existing manifest, route, and Dailymotion adapter paths instead of rebuilding from scratch.
+
+**Official docs checked**
+
+- Dailymotion large catalog guide: single result windows can be capped around 1000 results, and large catalogs should be split with `created_after` / `created_before`.
+- Dailymotion list videos reference: `limit` max is 100, and `page` max is 10 when `limit=100`.
+- Dailymotion retrieve user information reference: public user/profile metadata can request `videos_total`.
+- Prisma 7 docs: `prisma.config.ts` is the CLI datasource authority, removed migrate diff flags require `--to-schema`, and `migrate deploy` is the production/staging apply path.
+- Supabase Prisma docs: this repo remains aligned to the Supabase Session Pooler URL on port `5432` through `DATABASE_URL` only.
+- Next.js 16 local docs under `node_modules/next/dist/docs`: App Router route handlers remain `app/**/route.ts`, `.env*` files are loaded from the root even with `src/`, and Proxy replaces Middleware.
+- Vercel docs: Function duration is finite, so large channel fetches should be chunked instead of one giant request.
+
+**Files changed for this entry**
+
+- `prisma/schema.prisma`
+- `prisma/migrations/migration_lock.toml`
+- `prisma/migrations/20260506_channel_deep_fetch_history_persistence_foundation/migration.sql`
+- `.env.example`
+- `README.md`
+- `src/types/channel-fetch.ts`
+- `src/types/manifest.ts`
+- `src/lib/config/env.ts`
+- `src/lib/manifests/channel-manifest.ts`
+- `src/lib/platforms/dailymotion/dailymotion-client.ts`
+- `src/lib/platforms/dailymotion/dailymotion-channel-service.ts`
+- `src/lib/platforms/dailymotion/channel-fetch-settings.ts`
+- `src/lib/platforms/dailymotion/channel-metadata-service.ts`
+- `src/lib/platforms/dailymotion/channel-deep-fetch-service.ts`
+- `src/app/api/dailymotion/channel/metadata/route.ts`
+- `src/app/api/dailymotion/channel/jobs/start/route.ts`
+- `src/app/api/dailymotion/channel/jobs/next/route.ts`
+- `src/app/api/dailymotion/channel/jobs/stop/route.ts`
+- `src/app/api/dailymotion/channel/jobs/[id]/status/route.ts`
+- `src/app/api/dailymotion/channel/history/route.ts`
+- `src/app/api/dailymotion/channel/coverage/route.ts`
+- `src/app/api/dailymotion/channel/stop-fetch/route.ts`
+- `src/app/api/dailymotion/search/route.ts`
+- `src/app/channel-explorer/page.tsx`
+- `src/components/channel-explorer/channel-fetch-config-panel.tsx`
+- `src/components/channel-explorer/channel-metadata-panel.tsx`
+- `src/components/channel-explorer/channel-fetch-history-panel.tsx`
+- `src/components/channel-explorer/channel-coverage-panel.tsx`
+- `src/components/channel-explorer/channel-fetch-progress.tsx`
+- `src/components/channel-explorer/channel-input-panel.tsx`
+- `src/components/channel-explorer/channel-manifest-summary.tsx`
+- `src/components/filters/advanced-filter-panel.tsx`
+- `src/components/filters/active-filter-chips.tsx`
+
+**Product behavior now**
+
+- Channel Explorer now has separate Source Input, Channel Metadata, Fetch Configuration, Fetch Progress, Fetch History, Channel Coverage, Manifest Summary, Result Filters, Active Filter Chips, Results, and AI helper sections.
+- Fetch configuration controls provider collection only and is submitted only through explicit start/resume actions.
+- Result filters remain local manifest-only filters and do not trigger Dailymotion API requests.
+- Filter behavior still filters first, sorts second, and renders third; original manifest items are not mutated.
+- `0` remains valid numeric metadata through the existing zero-safe parser and filter engine.
+
+**Fetch profiles added**
+
+- `quick-preview`: one page for source verification.
+- `standard-fetch`: one uncapped-compatibility result window with legacy `MAX_CHANNEL_FETCH_PAGES` context.
+- `deep-balanced`: yearly windows with capped-year splits to months.
+- `deep-aggressive`: recursive year/month/week/day splitting within hard caps.
+- `recent-sync`: recent date-range profile.
+- `historical-backfill`: older date-range profile.
+- `custom-expert`: user-configurable caps, dates, units, split behavior, delay, stop behavior, and partial preservation.
+
+**Dailymotion handling**
+
+- The Dailymotion client now supports additional provider query params for time-window fetches.
+- Deep fetch uses `created_after` and `created_before` timestamps where windows are planned.
+- Page size is clamped by server hard caps and Dailymotion's documented maximum of 100.
+- Window caps are treated honestly: if a window still has more results at the provider cap, it is split when possible, otherwise marked capped/incomplete.
+- Videos are deduplicated by normalized Dailymotion video ID.
+- Public metadata fetching still does not require `DAILYMOTION_API_KEY`; the optional key remains server-only.
+- No downloading, scraping, stream bypassing, rehosting, private/protected data access, or invented video data was added.
+
+**Channel metadata and reported total**
+
+- New metadata route: `POST /api/dailymotion/channel/metadata`.
+- User/profile metadata requests ask for public fields including `id`, `username`, `screenname`, `url`, `description`, `country`, `language`, and `videos_total`.
+- UI labels the value as "Reported total from Dailymotion", never as a guaranteed total.
+- If `videos_total` is unavailable, the UI says reported total is unavailable and falls back to collected unique videos plus coverage status.
+- Metadata snapshots are represented in the Prisma foundation through `VideoSource` and `SourceCatalogSnapshot`.
+
+**History, resume, and persistence status**
+
+- Runtime route-backed jobs now exist:
+  - `POST /api/dailymotion/channel/jobs/start`
+  - `POST /api/dailymotion/channel/jobs/next`
+  - `POST /api/dailymotion/channel/jobs/stop`
+  - `GET /api/dailymotion/channel/jobs/[id]/status`
+  - `GET /api/dailymotion/channel/history`
+  - `GET /api/dailymotion/channel/coverage`
+- Jobs process small route-handler chunks rather than one giant long-running request.
+- Runtime history/resume is real for the current server runtime session and is labeled as runtime-memory persistence in the UI.
+- Durable DB-backed history/resume is schema-ready but not wired into runtime repositories yet. At the time of this entry the migration had not been applied; see the newer audit/apply entry for current migration status.
+- The UI shows resume buttons only for actual runtime jobs that are resumable.
+
+**Coverage behavior**
+
+- Coverage shows reported total when available, collected unique public videos, estimated remaining, coverage percent when reportable, completeness status, confidence, capped windows, failed windows, pending windows, latest checkpoint, and last resume point.
+- Complete coverage is only shown when every planned window completed without caps, failures, stops, or max-limit interruptions.
+- Partial/capped/stopped/failed/max-items/provider-limited states are kept distinct.
+
+**Database and migration truth**
+
+- Canonical durable models now include `VideoSource`, `Video`, `Collection`, `SavedVideo`, and `SourceCatalogSnapshot`.
+- Temporary/operational models now include `Manifest`, `ManifestItem`, `FetchJob`, `FetchWindow`, `FetchPageAttempt`, and `FetchJobEvent`.
+- Temporary manifests and fetch jobs have `expiresAt`; canonical videos, sources, saved videos, and collections are durable.
+- Migration created: `prisma/migrations/20260506_channel_deep_fetch_history_persistence_foundation/migration.sql`.
+- Migration applied at the time of this entry: no. Superseded by the newer audit/apply entry.
+- `db:apply` was not run during this entry. It was run later under explicit confirmation.
+- No destructive DB command was run.
+- `prisma db push`, `prisma migrate reset`, drops, or table deletion commands were not run.
+- Tables are mapped to lowercase snake_case names for Postgres/Supabase compatibility.
+- RLS is enabled in the migration without broad public policies so future owner-scoped policies can be added deliberately.
+
+**Environment variables**
+
+- Existing variables preserved: `ENABLE_PGVECTOR`, `ENABLE_MANIFEST_PERSISTENCE`, `MAX_CHANNEL_FETCH_PAGES`, `MAX_CHANNEL_FETCH_ITEMS`, `CHANNEL_FETCH_DELAY_MS`.
+- Added and documented:
+  - `MAX_CHANNEL_FETCH_WINDOWS`
+  - `MAX_CHANNEL_FETCH_WINDOW_DEPTH`
+  - `MAX_CHANNEL_FETCH_TOTAL_PAGES`
+  - `MAX_CHANNEL_FETCH_PAGE_SIZE`
+  - `CHANNEL_FETCH_MIN_DELAY_MS`
+  - `CHANNEL_FETCH_DEFAULT_PROFILE`
+  - `CHANNEL_FETCH_JOB_TTL_HOURS`
+  - `TEMP_MANIFEST_TTL_HOURS`
+- `MAX_CHANNEL_FETCH_PAGES` remains the legacy one-window fetch-all compatibility cap; deep fetch uses `MAX_CHANNEL_FETCH_TOTAL_PAGES` across all windows.
+- `DIRECT_URL` was not restored.
+- Supabase direct host guidance was not reintroduced as an active workflow.
+
+**Verification**
+
+- `npx prisma validate`: passed.
+- `npm run typecheck`: passed.
+- `npx prisma generate`: passed and generated Prisma Client `7.8.0`.
+- `npm run db:validate`: passed and printed sanitized Session Pooler metadata only.
+- `npm run db:status`: reached Prisma migration status successfully; it exited non-zero because the new migration is pending and was intentionally not applied.
+- `npm run build`: passed on Next.js `16.2.4`.
+- `npm run lint`: blocked because the existing script still runs removed Next.js 16 command `next lint`, which Next interpreted as an invalid project directory named `lint`.
+- Local dev server: started on `http://localhost:3000`; `GET /channel-explorer` returned HTTP 200.
+- Live Dailymotion manual source test from PowerShell was blocked by DNS resolution failure for `api.dailymotion.com` in this shell, so provider runtime behavior was not claimed as manually verified.
+
+**Safety notes**
+
+- Secrets were not intentionally printed. `db:validate`/`db:status` output stayed sanitized.
+- `DATABASE_URL` remains the only active database URL.
+- `DAILYMOTION_API_KEY` remains optional and server-only.
+- Runtime persistence is not DB persistence yet; do not claim durable resume until repositories are wired and the migration is applied/verified.
 
 ## 2026-05-06 Prisma Schema-Engine Status Diagnostic Repair
 
@@ -394,8 +654,8 @@ npm run db:studio
 **Migration status diagnostics**
 
 - `npm run db:status` is a project wrapper, not raw Prisma.
-- The wrapper validates env, checks Prisma connectivity with a non-mutating `SELECT 1`, then runs `prisma migrate status` only after connectivity succeeds.
-- Current live diagnosis is blocked by Session Pooler connection/authentication (`P1001` transient reachability followed by `P1000` authentication failure), while raw Prisma still reports only a bare schema-engine error.
+- The wrapper validates env, applies a process-only Prisma CLI `connect_timeout` default when needed, checks Prisma connectivity with a non-mutating `SELECT 1`, then runs `prisma migrate status` only after connectivity succeeds.
+- Current live status against the configured Supabase Session Pooler reaches migration status successfully and reports the schema is up to date.
 
 **Why `DATABASE_URL` is the required DB variable**
 
@@ -421,9 +681,9 @@ npm run db:studio
 
 **Current schema reality**
 
-- The schema is ready for persistence.
-- No `prisma/migrations` directory is committed in the current repo snapshot, so migration files are not yet committed here.
-- `db:apply` now refuses to run `migrate deploy` until reviewed Prisma migration files exist.
+- The Prisma migration history exists under `prisma/migrations`.
+- `20260506_channel_deep_fetch_history_persistence_foundation` has been applied to the configured Supabase/Postgres target.
+- The schema is applied and ready for future repository wiring, but current product runtime paths still use runtime/in-memory persistence.
 
 ## Migration Workflow
 
@@ -446,7 +706,7 @@ CONFIRM_DB_APPLY=true npm run db:apply
 **What each DB script does**
 
 - `db:validate`: validates DB env and prints sanitized connection metadata only.
-- `db:status`: validates env, warns about missing local migration history, checks Prisma connectivity with `SELECT 1`, then runs `prisma migrate status` only after connectivity succeeds.
+- `db:status`: validates env, applies process-only Prisma CLI timeout hardening, checks Prisma connectivity with `SELECT 1`, then runs `prisma migrate status` only after connectivity succeeds.
 - `db:apply`: validates env, requires committed migration files, checks status through the wrapper, requires confirmation for production-like targets, runs `migrate deploy`, runs `generate`, and checks status again.
 
 **GitHub Actions workflow**
@@ -530,6 +790,13 @@ CONFIRM_DB_APPLY=true npm run db:apply
 | `/api/dailymotion/channel/analyze` | `POST` | Parse channel/profile/user input into a source descriptor. | `dailymotion-url-analyzer.ts` | Returns `400` with a controlled error on invalid input. |
 | `/api/dailymotion/channel/fetch` | `POST` | Fetch the first page of a channel feed and wrap it in a manifest. | `dailymotion-channel-service.ts` | Returns controlled `rate_limited`, `unknown`, or provider errors. |
 | `/api/dailymotion/channel/fetch-all` | `POST` | Paginate through public channel results with dedupe, delay, and safety caps. | Dailymotion client, manifest builder, fetch safety config | Preserves partial manifests on failure and exposes retry context. |
+| `/api/dailymotion/channel/metadata` | `POST` | Fetch public channel/profile metadata such as reported video totals when available. | `channel-metadata-service.ts` | Labels provider totals as reported, not guaranteed complete. |
+| `/api/dailymotion/channel/jobs/start` | `POST` | Start a runtime-memory channel fetch job. | `channel-deep-fetch-service.ts` | Uses server-clamped fetch settings and chunked processing. |
+| `/api/dailymotion/channel/jobs/next` | `POST` | Process the next runtime job chunk. | `channel-deep-fetch-service.ts` | Preserves partial progress and bounded work per request. |
+| `/api/dailymotion/channel/jobs/stop` | `POST` | Stop a runtime fetch job. | `channel-deep-fetch-service.ts` | Marks runtime job state without deleting collected metadata. |
+| `/api/dailymotion/channel/jobs/[id]/status` | `GET` | Read runtime fetch job status. | `channel-deep-fetch-service.ts` | Returns only current runtime job metadata. |
+| `/api/dailymotion/channel/history` | `GET` | List runtime fetch history for the current server process. | `channel-deep-fetch-service.ts` | Does not claim durable database history yet. |
+| `/api/dailymotion/channel/coverage` | `GET` | Summarize source coverage from runtime job/manifest state. | `channel-deep-fetch-service.ts` | Distinguishes complete, partial, capped, failed, stopped, and provider-limited states. |
 | `/api/dailymotion/channel/stop-fetch` | `POST` | Explain stop behavior. | None | Safe informational route only; no server-side job cancellation. |
 | `/api/dailymotion/search` | `POST` | Search global Dailymotion video metadata and build a temporary manifest. | Dailymotion client, temporary manifest builder | Rejects empty queries and returns controlled provider errors. |
 | `/api/manifests/channel/filter` | `POST` | Apply advanced filters to supplied manifest items. | `apply-advanced-video-filters.ts` | Pure transform over caller-provided items. |
@@ -594,12 +861,18 @@ CONFIRM_DB_APPLY=true npm run db:apply
 |   |-- env_backup.txt
 |   `-- git_github_arabic_commands_guide.md
 |-- prisma/
+|   |-- migrations/
+|   |   |-- 20260506_channel_deep_fetch_history_persistence_foundation/
+|   |   |   `-- migration.sql
+|   |   `-- migration_lock.toml
 |   `-- schema.prisma
 |-- scripts/
 |   |-- app-validate-env.mjs
 |   |-- db-apply.mjs
+|   |-- db-status.mjs
 |   |-- db-validate-env.mjs
-|   `-- load-project-env.mjs
+|   |-- load-project-env.mjs
+|   `-- prisma-command-env.mjs
 |-- src/
 |   |-- app/
 |   |   |-- ai-search/
@@ -768,7 +1041,9 @@ CONFIRM_DB_APPLY=true npm run db:apply
 | `scripts/load-project-env.mjs` | Shared dotenv loader with env file priority and unsupported-file warnings. | Central helper for all standalone script env behavior. |
 | `scripts/app-validate-env.mjs` | Build-time app env validation. | Stops `next build` early when required app env is missing. |
 | `scripts/db-validate-env.mjs` | Sanitized DB env validation. | Validates DB URLs safely without printing secrets. |
+| `scripts/db-status.mjs` | Sanitized Prisma migration status wrapper. | Applies process-only timeout hardening, checks connectivity, then reports migration status. |
 | `scripts/db-apply.mjs` | Guarded migration apply flow. | Enforces confirmation and safe command ordering for DB changes. |
+| `scripts/prisma-command-env.mjs` | Process-only Prisma CLI connection defaults. | Adds `connect_timeout` for DB scripts without rewriting stored env values. |
 | `.github/workflows/db-migrate.yml` | Manual-only migration workflow. | Production-oriented migration path for GitHub Actions users. |
 
 ### Prisma
@@ -776,6 +1051,8 @@ CONFIRM_DB_APPLY=true npm run db:apply
 | Path | What it contains | Why it matters |
 | --- | --- | --- |
 | `prisma/schema.prisma` | Postgres schema models for sources, videos, manifests, jobs, and saved items. | Core data model for future persistence and migrations. |
+| `prisma/migrations/20260506_channel_deep_fetch_history_persistence_foundation/migration.sql` | Applied migration for the current persistence foundation. | Creates canonical/temporary tables, indexes, relations, enums, and RLS. |
+| `prisma/migrations/migration_lock.toml` | Prisma migration provider lock. | Records the Postgres provider for migration history. |
 
 ### App shell and pages
 
@@ -873,15 +1150,14 @@ CONFIRM_DB_APPLY=true npm run db:apply
 
 - The current real product surface is mostly `/channel-explorer`.
 - `/search`, `/ai-search`, and `/saved` are still mostly placeholder UIs.
-- The Prisma/Supabase persistence foundation exists, but the current explorer flow still returns in-memory manifests rather than persisting them.
-- The app schema expects committed migrations under `prisma/migrations`, but no migrations directory is committed in the current repo snapshot.
-- Current Prisma status against the configured Session Pooler is blocked by connection/authentication diagnostics (`P1001`/`P1000`) before migration history can be compared.
+- The Prisma/Supabase persistence foundation is applied in the configured database, but the current explorer flow still returns runtime/in-memory manifests rather than persisting them through repositories.
+- `npm run lint` is blocked by the stale `next lint` script; Next.js 16 requires moving linting to a direct ESLint or Biome command.
 - `stop-fetch` is informational only; actual stop behavior is browser-side `AbortController`, not server-side job cancellation.
 - AI routes currently return plain text, not strongly structured end-to-end JSON workflows.
 - No visible sign-in, sign-up, or full account management UI exists in the scanned app pages.
 - No visible runtime Prisma client usage was found in `src`, so persistence is not yet wired into the main product loop.
 - `framer-motion` is installed but not visibly used in the scanned source files.
-- Real database status and apply behavior still require user action with valid credentials and, likely, URL-encoded DB password characters if reserved characters are present.
+- Future database applies still require the operator to verify the target database and set `CONFIRM_DB_APPLY=true`.
 
 ## Future Roadmap
 

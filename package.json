@@ -29,7 +29,7 @@
     "dotenv": "^17.4.2",
     "framer-motion": "latest",
     "lucide-react": "latest",
-    "next": "^16.2.4",
+    "next": "^16.2.0",
     "prisma": "7.8.0",
     "react": "latest",
     "react-dom": "latest",
@@ -44,5 +44,9 @@
     "@types/react-dom": "latest",
     "tailwindcss": "latest",
     "typescript": "latest"
+  },
+  "overrides": {
+    "@hono/node-server": "1.19.14",
+    "postcss": "8.5.14"
   }
 }

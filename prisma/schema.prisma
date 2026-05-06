@@ -6,132 +6,438 @@ datasource db {
   provider = "postgresql"
 }
 
-model VideoSource {
-  id             String   @id @default(uuid()) @db.Uuid
-  platform       String
-  sourceType     String
-  externalId     String?
-  canonicalUrl   String?
-  title          String?
-  description    String?
-  thumbnailUrl   String?
-  ownerName      String?
-  rawMetadata    Json?
-  lastFetchedAt  DateTime? @db.Timestamptz(6)
-  createdAt      DateTime  @default(now()) @db.Timestamptz(6)
-  updatedAt      DateTime  @updatedAt @db.Timestamptz(6)
-  manifests      Manifest[]
+enum ManifestType {
+  CHANNEL
+  SEARCH
+  AI_ASSISTED_SEARCH
 
-  @@unique([platform, sourceType, externalId])
+  @@map("manifest_type")
+}
+
+enum ManifestPersistenceType {
+  TEMPORARY
+  DURABLE
+
+  @@map("manifest_persistence_type")
+}
+
+enum ManifestStatus {
+  DRAFT
+  FETCHING
+  PARTIAL
+  COMPLETE
+  CAPPED
+  STOPPED
+  FAILED
+  EXPIRED
+
+  @@map("manifest_status")
+}
+
+enum FetchProfile {
+  QUICK_PREVIEW
+  STANDARD_FETCH
+  DEEP_BALANCED
+  DEEP_AGGRESSIVE
+  RECENT_SYNC
+  HISTORICAL_BACKFILL
+  CUSTOM_EXPERT
+
+  @@map("fetch_profile")
+}
+
+enum FetchJobStatus {
+  PENDING
+  RUNNING
+  PARTIAL
+  COMPLETE
+  CAPPED
+  STOPPED
+  FAILED
+  MAX_ITEMS_REACHED
+  TIMEOUT_LIMITED
+  PROVIDER_LIMITED
+  AUTH_OR_PROVIDER_LIMITED
+  EXPIRED
+
+  @@map("fetch_job_status")
+}
+
+enum FetchWindowStatus {
+  PENDING
+  RUNNING
+  COMPLETE
+  CAPPED
+  SPLIT
+  FAILED
+  STOPPED
+  SKIPPED
+
+  @@map("fetch_window_status")
+}
+
+enum FetchWindowUnit {
+  ALL
+  YEAR
+  MONTH
+  WEEK
+  DAY
+
+  @@map("fetch_window_unit")
+}
+
+enum FetchPageAttemptStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  RATE_LIMITED
+  AUTH_OR_PROVIDER_LIMITED
+  CANCELED
+
+  @@map("fetch_page_attempt_status")
+}
+
+enum CoverageStatus {
+  UNKNOWN
+  PARTIAL
+  COMPLETE
+  CAPPED
+  FAILED
+  STOPPED
+  MAX_ITEMS_REACHED
+  PROVIDER_LIMITED
+  TIMEOUT_LIMITED
+  AUTH_OR_PROVIDER_LIMITED
+  EXPIRED
+
+  @@map("coverage_status")
+}
+
+enum CoverageConfidence {
+  HIGH
+  MEDIUM
+  LOW
+  UNKNOWN
+
+  @@map("coverage_confidence")
+}
+
+model VideoSource {
+  id                       String                  @id @default(uuid()) @db.Uuid
+  platform                 String
+  externalSourceId         String                  @map("external_source_id")
+  sourceType               String                  @map("source_type")
+  handle                   String?
+  username                 String?
+  displayName              String?                 @map("display_name")
+  canonicalUrl             String?                 @map("canonical_url")
+  thumbnailUrl             String?                 @map("thumbnail_url")
+  avatarUrl                String?                 @map("avatar_url")
+  description              String?
+  country                  String?
+  language                 String?
+  reportedTotalFromApi     Int?                    @map("reported_total_from_api")
+  reportedTotalFieldName   String?                 @map("reported_total_field_name")
+  reportedTotalCheckedAt   DateTime?               @map("reported_total_checked_at") @db.Timestamptz(6)
+  metadataJson             Json?                   @map("metadata_json")
+  firstSeenAt              DateTime                @default(now()) @map("first_seen_at") @db.Timestamptz(6)
+  lastFetchedAt            DateTime?               @map("last_fetched_at") @db.Timestamptz(6)
+  lastMetadataRefreshAt    DateTime?               @map("last_metadata_refresh_at") @db.Timestamptz(6)
+  createdAt                DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
+  videos                   Video[]
+  manifests                Manifest[]
+  fetchJobs                FetchJob[]
+  fetchWindows             FetchWindow[]
+  catalogSnapshots         SourceCatalogSnapshot[]
+
+  @@unique([platform, externalSourceId, sourceType])
+  @@index([platform, sourceType])
+  @@index([handle])
+  @@index([username])
+  @@map("video_sources")
 }
 
 model Video {
-  id                 String   @id @default(uuid()) @db.Uuid
-  platform           String
-  externalVideoId    String
-  canonicalUrl       String?
-  embedUrl           String?
-  title              String
-  description        String?
-  thumbnailUrl       String?
-  durationSeconds    Int?
-  views              BigInt?
-  rating             Decimal? @db.Decimal(6, 3)
-  language           String?
-  createdAtPlatform  DateTime? @db.Timestamptz(6)
-  year               Int?
-  channelExternalId  String?
-  channelName        String?
-  ownerExternalId    String?
-  ownerName          String?
-  tags               String[]
-  hasThumbnail       Boolean @default(false)
-  hasDescription     Boolean @default(false)
-  rawMetadata        Json?
-  metadataHash       String?
-  firstSeenAt        DateTime? @db.Timestamptz(6)
-  lastSeenAt         DateTime? @db.Timestamptz(6)
-  updatedAt          DateTime @updatedAt @db.Timestamptz(6)
-  manifestItems      ManifestItem[]
-  savedVideos        SavedVideo[]
+  id                String         @id @default(uuid()) @db.Uuid
+  platform          String
+  platformVideoId   String         @map("platform_video_id")
+  sourceId          String?        @map("source_id") @db.Uuid
+  url               String?
+  embedUrl          String?        @map("embed_url")
+  title             String
+  description       String?
+  thumbnailUrl      String?        @map("thumbnail_url")
+  durationSeconds   Int?           @map("duration_seconds")
+  viewsCount        BigInt?        @map("views_count")
+  rating            Decimal?       @db.Decimal(8, 3)
+  language          String?
+  ownerId           String?        @map("owner_id")
+  ownerName         String?        @map("owner_name")
+  channelId         String?        @map("channel_id")
+  channelName       String?        @map("channel_name")
+  tags              String[]
+  publishedAt       DateTime?      @map("published_at") @db.Timestamptz(6)
+  year              Int?
+  hasThumbnail      Boolean        @default(false) @map("has_thumbnail")
+  hasDescription    Boolean        @default(false) @map("has_description")
+  rawJson           Json?          @map("raw_json")
+  metadataHash      String?        @map("metadata_hash")
+  firstSeenAt       DateTime       @default(now()) @map("first_seen_at") @db.Timestamptz(6)
+  lastSeenAt        DateTime?      @map("last_seen_at") @db.Timestamptz(6)
+  updatedAt         DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  source            VideoSource?   @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  manifestItems     ManifestItem[]
+  savedVideos       SavedVideo[]
 
-  @@unique([platform, externalVideoId])
+  @@unique([platform, platformVideoId])
+  @@index([sourceId, publishedAt])
+  @@index([platform, publishedAt])
+  @@index([ownerId])
+  @@index([channelId])
+  @@map("videos")
 }
 
-model Manifest {
-  id               String   @id @default(uuid()) @db.Uuid
-  userId           String?  @db.Uuid
-  manifestType     String
-  platform         String
-  sourceId         String?  @db.Uuid
-  sourceInput      String?
-  sourceUrl        String?
-  query            String?
-  filterSnapshot   Json?
-  status           String
-  isComplete       Boolean  @default(false)
-  isPartial        Boolean  @default(false)
-  totalKnownItems  BigInt?
-  totalFetchedItems BigInt  @default(0)
-  pagesFetched     Int      @default(0)
-  requestId        String?
-  createdAt        DateTime @default(now()) @db.Timestamptz(6)
-  updatedAt        DateTime @updatedAt @db.Timestamptz(6)
-  expiresAt        DateTime? @db.Timestamptz(6)
-  source           VideoSource? @relation(fields: [sourceId], references: [id])
-  items            ManifestItem[]
-  fetchJobs        FetchJob[]
-}
+model Collection {
+  id          String       @id @default(uuid()) @db.Uuid
+  ownerId     String?      @map("owner_id") @db.Uuid
+  name        String
+  description String?
+  createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  savedVideos SavedVideo[]
 
-model ManifestItem {
-  id           String   @id @default(uuid()) @db.Uuid
-  manifestId   String   @db.Uuid
-  videoId      String   @db.Uuid
-  position     BigInt
-  pageNumber   Int?
-  matchedReason String?
-  aiScore      Decimal? @db.Decimal(6, 3)
-  createdAt    DateTime @default(now()) @db.Timestamptz(6)
-  manifest     Manifest @relation(fields: [manifestId], references: [id], onDelete: Cascade)
-  video        Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
-
-  @@unique([manifestId, videoId])
-}
-
-model FetchJob {
-  id           String   @id @default(uuid()) @db.Uuid
-  userId       String?  @db.Uuid
-  manifestId   String   @db.Uuid
-  platform     String
-  jobType      String
-  status       String
-  sourceInput  String?
-  sourceUrl    String?
-  cursor       String?
-  nextPageUrl  String?
-  currentPage  Int      @default(0)
-  itemsFetched BigInt   @default(0)
-  maxPages     Int?
-  maxItems     BigInt?
-  delayMs      Int?
-  errorMessage String?
-  startedAt    DateTime? @db.Timestamptz(6)
-  stoppedAt    DateTime? @db.Timestamptz(6)
-  completedAt  DateTime? @db.Timestamptz(6)
-  createdAt    DateTime @default(now()) @db.Timestamptz(6)
-  updatedAt    DateTime @updatedAt @db.Timestamptz(6)
-  manifest     Manifest @relation(fields: [manifestId], references: [id], onDelete: Cascade)
+  @@index([ownerId])
+  @@map("collections")
 }
 
 model SavedVideo {
-  id        String   @id @default(uuid()) @db.Uuid
-  userId    String   @db.Uuid
-  videoId   String   @db.Uuid
-  favorite  Boolean  @default(false)
-  notes     String?
-  savedAt   DateTime @default(now()) @db.Timestamptz(6)
-  updatedAt DateTime @updatedAt @db.Timestamptz(6)
-  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  id           String      @id @default(uuid()) @db.Uuid
+  ownerId      String?     @map("owner_id") @db.Uuid
+  videoId      String      @map("video_id") @db.Uuid
+  collectionId String?     @map("collection_id") @db.Uuid
+  favorite     Boolean     @default(false)
+  notes        String?
+  tags         String[]    @default([])
+  savedAt      DateTime    @default(now()) @map("saved_at") @db.Timestamptz(6)
+  updatedAt    DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+  video        Video       @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  collection   Collection? @relation(fields: [collectionId], references: [id], onDelete: SetNull)
 
-  @@unique([userId, videoId])
+  @@unique([ownerId, videoId, collectionId])
+  @@index([videoId])
+  @@index([collectionId])
+  @@map("saved_videos")
+}
+
+model Manifest {
+  id                    String                  @id @default(uuid()) @db.Uuid
+  ownerId               String?                 @map("owner_id") @db.Uuid
+  manifestType          ManifestType            @map("manifest_type")
+  persistenceType       ManifestPersistenceType  @default(TEMPORARY) @map("persistence_type")
+  platform              String
+  sourceId              String?                 @map("source_id") @db.Uuid
+  sourceInput           String?                 @map("source_input")
+  sourceUrl             String?                 @map("source_url")
+  query                 String?
+  status                ManifestStatus          @default(DRAFT)
+  completenessStatus    CoverageStatus          @default(UNKNOWN) @map("completeness_status")
+  itemCount             BigInt                  @default(0) @map("item_count")
+  uniqueItemCount       BigInt                  @default(0) @map("unique_item_count")
+  duplicateCount        BigInt                  @default(0) @map("duplicate_count")
+  totalPagesFetched     Int                     @default(0) @map("total_pages_fetched")
+  totalWindowsProcessed Int                     @default(0) @map("total_windows_processed")
+  cappedWindowCount     Int                     @default(0) @map("capped_window_count")
+  failedWindowCount     Int                     @default(0) @map("failed_window_count")
+  fetchSettingsJson     Json?                   @map("fetch_settings_json")
+  filtersSnapshotJson   Json?                   @map("filters_snapshot_json")
+  requestId             String?                 @map("request_id")
+  expiresAt             DateTime?               @map("expires_at") @db.Timestamptz(6)
+  createdAt             DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
+  completedAt           DateTime?               @map("completed_at") @db.Timestamptz(6)
+  source                VideoSource?            @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  items                 ManifestItem[]
+  fetchJobs             FetchJob[]
+
+  @@index([sourceId, status, updatedAt])
+  @@index([status, expiresAt])
+  @@index([manifestType, persistenceType])
+  @@map("manifests")
+}
+
+model ManifestItem {
+  id                    String       @id @default(uuid()) @db.Uuid
+  manifestId            String       @map("manifest_id") @db.Uuid
+  videoId               String       @map("video_id") @db.Uuid
+  fetchWindowId         String?      @map("fetch_window_id") @db.Uuid
+  position              BigInt
+  pageNumber            Int?         @map("page_number")
+  matchedReason         String?      @map("matched_reason")
+  aiScore               Decimal?     @map("ai_score") @db.Decimal(8, 3)
+  firstSeenInManifestAt DateTime     @default(now()) @map("first_seen_in_manifest_at") @db.Timestamptz(6)
+  metadataSnapshotJson  Json?        @map("metadata_snapshot_json")
+  createdAt             DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  manifest              Manifest     @relation(fields: [manifestId], references: [id], onDelete: Cascade)
+  video                 Video        @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  fetchWindow           FetchWindow? @relation(fields: [fetchWindowId], references: [id], onDelete: SetNull)
+
+  @@unique([manifestId, videoId])
+  @@index([manifestId, position])
+  @@index([videoId])
+  @@index([fetchWindowId])
+  @@map("manifest_items")
+}
+
+model FetchJob {
+  id                         String          @id @default(uuid()) @db.Uuid
+  ownerId                    String?         @map("owner_id") @db.Uuid
+  sourceId                   String?         @map("source_id") @db.Uuid
+  manifestId                 String?         @map("manifest_id") @db.Uuid
+  jobType                    String          @map("job_type")
+  platform                   String
+  sourceInput                String          @map("source_input")
+  sourceUrl                  String?         @map("source_url")
+  fetchProfile               FetchProfile    @map("fetch_profile")
+  status                     FetchJobStatus  @default(PENDING)
+  settingsJson               Json            @map("settings_json")
+  progressJson               Json?           @map("progress_json")
+  errorJson                  Json?           @map("error_json")
+  resumeCursorJson           Json?           @map("resume_cursor_json")
+  currentWindowId            String?         @map("current_window_id") @db.Uuid
+  currentPage                Int?            @map("current_page")
+  lastCompletedWindowId      String?         @map("last_completed_window_id") @db.Uuid
+  maxItems                   BigInt?         @map("max_items")
+  maxPages                   Int?            @map("max_pages")
+  maxWindows                 Int?            @map("max_windows")
+  pagesFetched               Int             @default(0) @map("pages_fetched")
+  windowsProcessed           Int             @default(0) @map("windows_processed")
+  itemsCollected             BigInt          @default(0) @map("items_collected")
+  uniqueItemsCollected       BigInt          @default(0) @map("unique_items_collected")
+  duplicateCount             BigInt          @default(0) @map("duplicate_count")
+  cappedWindowCount          Int             @default(0) @map("capped_window_count")
+  failedWindowCount          Int             @default(0) @map("failed_window_count")
+  sourceReportedTotalAtStart Int?            @map("source_reported_total_at_start")
+  sourceReportedTotalAtEnd   Int?            @map("source_reported_total_at_end")
+  collectedUniqueAtStart     BigInt          @default(0) @map("collected_unique_at_start")
+  collectedUniqueAtEnd       BigInt          @default(0) @map("collected_unique_at_end")
+  coverageStatusAtStart      CoverageStatus  @default(UNKNOWN) @map("coverage_status_at_start")
+  coverageStatusAtEnd        CoverageStatus  @default(UNKNOWN) @map("coverage_status_at_end")
+  resumable                  Boolean         @default(true)
+  stoppedAt                  DateTime?       @map("stopped_at") @db.Timestamptz(6)
+  startedAt                  DateTime?       @map("started_at") @db.Timestamptz(6)
+  completedAt                DateTime?       @map("completed_at") @db.Timestamptz(6)
+  expiresAt                  DateTime?       @map("expires_at") @db.Timestamptz(6)
+  createdAt                  DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                  DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+  source                     VideoSource?    @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  manifest                   Manifest?       @relation(fields: [manifestId], references: [id], onDelete: SetNull)
+  windows                    FetchWindow[]
+  pageAttempts               FetchPageAttempt[]
+  events                     FetchJobEvent[]
+
+  @@index([sourceId, status, updatedAt])
+  @@index([status, expiresAt])
+  @@index([fetchProfile])
+  @@index([manifestId])
+  @@map("fetch_jobs")
+}
+
+model FetchWindow {
+  id                   String           @id @default(uuid()) @db.Uuid
+  fetchJobId           String           @map("fetch_job_id") @db.Uuid
+  sourceId             String?          @map("source_id") @db.Uuid
+  parentWindowId       String?          @map("parent_window_id") @db.Uuid
+  status               FetchWindowStatus @default(PENDING)
+  windowStart          DateTime?        @map("window_start") @db.Timestamptz(6)
+  windowEnd            DateTime?        @map("window_end") @db.Timestamptz(6)
+  unit                 FetchWindowUnit
+  depth                Int              @default(0)
+  pageStart            Int              @default(1) @map("page_start")
+  nextPageToFetch      Int              @default(1) @map("next_page_to_fetch")
+  pagesFetched         Int              @default(0) @map("pages_fetched")
+  itemsFound           BigInt           @default(0) @map("items_found")
+  uniqueItemsAdded     BigInt           @default(0) @map("unique_items_added")
+  duplicateItemsFound  BigInt           @default(0) @map("duplicate_items_found")
+  reachedProviderCap   Boolean          @default(false) @map("reached_provider_cap")
+  hasMoreAtEnd         Boolean?         @map("has_more_at_end")
+  reportedTotalInWindow Int?            @map("reported_total_in_window")
+  errorJson            Json?            @map("error_json")
+  startedAt            DateTime?        @map("started_at") @db.Timestamptz(6)
+  completedAt          DateTime?        @map("completed_at") @db.Timestamptz(6)
+  createdAt            DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  fetchJob             FetchJob         @relation(fields: [fetchJobId], references: [id], onDelete: Cascade)
+  source               VideoSource?     @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  parentWindow         FetchWindow?     @relation("FetchWindowChildren", fields: [parentWindowId], references: [id], onDelete: SetNull)
+  childWindows         FetchWindow[]    @relation("FetchWindowChildren")
+  pageAttempts         FetchPageAttempt[]
+  manifestItems        ManifestItem[]
+
+  @@index([fetchJobId, status, windowStart, windowEnd])
+  @@index([sourceId, status, windowStart])
+  @@index([parentWindowId])
+  @@map("fetch_windows")
+}
+
+model FetchPageAttempt {
+  id                   String                 @id @default(uuid()) @db.Uuid
+  fetchWindowId        String                 @map("fetch_window_id") @db.Uuid
+  fetchJobId           String                 @map("fetch_job_id") @db.Uuid
+  pageNumber           Int                    @map("page_number")
+  limit                Int
+  requestParamsJson    Json                   @map("request_params_json")
+  status               FetchPageAttemptStatus @default(PENDING)
+  itemsReturned        Int                    @default(0) @map("items_returned")
+  uniqueItemsAdded     Int                    @default(0) @map("unique_items_added")
+  duplicateItemsFound  Int                    @default(0) @map("duplicate_items_found")
+  hasMore              Boolean                @default(false) @map("has_more")
+  providerErrorCode    String?                @map("provider_error_code")
+  errorJson            Json?                  @map("error_json")
+  requestedAt          DateTime               @default(now()) @map("requested_at") @db.Timestamptz(6)
+  completedAt          DateTime?              @map("completed_at") @db.Timestamptz(6)
+  fetchWindow          FetchWindow            @relation(fields: [fetchWindowId], references: [id], onDelete: Cascade)
+  fetchJob             FetchJob               @relation(fields: [fetchJobId], references: [id], onDelete: Cascade)
+
+  @@index([fetchJobId, fetchWindowId, pageNumber])
+  @@index([fetchWindowId, status])
+  @@map("fetch_page_attempts")
+}
+
+model SourceCatalogSnapshot {
+  id                       String             @id @default(uuid()) @db.Uuid
+  sourceId                 String             @map("source_id") @db.Uuid
+  platform                 String
+  reportedTotalFromApi     Int?               @map("reported_total_from_api")
+  reportedTotalFieldName   String?            @map("reported_total_field_name")
+  reportedTotalRawJson     Json?              @map("reported_total_raw_json")
+  collectedUniqueVideos    BigInt             @default(0) @map("collected_unique_videos")
+  estimatedRemainingVideos BigInt?            @map("estimated_remaining_videos")
+  coveragePercent          Decimal?           @map("coverage_percent") @db.Decimal(6, 2)
+  coverageStatus           CoverageStatus     @default(UNKNOWN) @map("coverage_status")
+  coverageConfidence       CoverageConfidence @default(UNKNOWN) @map("coverage_confidence")
+  cappedWindowCount        Int                @default(0) @map("capped_window_count")
+  failedWindowCount        Int                @default(0) @map("failed_window_count")
+  completedWindowCount     Int                @default(0) @map("completed_window_count")
+  pendingWindowCount       Int                @default(0) @map("pending_window_count")
+  lastCheckedAt            DateTime           @default(now()) @map("last_checked_at") @db.Timestamptz(6)
+  createdAt                DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  source                   VideoSource        @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@index([sourceId, lastCheckedAt])
+  @@index([coverageStatus])
+  @@map("source_catalog_snapshots")
+}
+
+model FetchJobEvent {
+  id         String   @id @default(uuid()) @db.Uuid
+  fetchJobId String   @map("fetch_job_id") @db.Uuid
+  eventType  String   @map("event_type")
+  message    String
+  dataJson   Json?    @map("data_json")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  fetchJob   FetchJob @relation(fields: [fetchJobId], references: [id], onDelete: Cascade)
+
+  @@index([fetchJobId, createdAt])
+  @@map("fetch_job_events")
 }

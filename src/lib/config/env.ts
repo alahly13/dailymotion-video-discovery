@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { publicEnv } from "./public-env";
+import type { FetchProfile, FetchSafetyCaps } from "@/types/channel-fetch";
 
 const postgresUrlSchema = z.string().url().refine((value) => {
   try {
@@ -26,8 +27,18 @@ const optionalServerSchema = z.object({
   ENABLE_PGVECTOR: z.enum(["true", "false"]).default("false"),
   ENABLE_MANIFEST_PERSISTENCE: z.enum(["true", "false"]).default("true"),
   MAX_CHANNEL_FETCH_PAGES: z.coerce.number().int().positive().default(200),
-  MAX_CHANNEL_FETCH_ITEMS: z.coerce.number().int().positive().default(10000),
+  MAX_CHANNEL_FETCH_ITEMS: z.coerce.number().int().positive().default(100000),
+  MAX_CHANNEL_FETCH_WINDOWS: z.coerce.number().int().positive().default(3000),
+  MAX_CHANNEL_FETCH_WINDOW_DEPTH: z.coerce.number().int().positive().default(5),
+  MAX_CHANNEL_FETCH_TOTAL_PAGES: z.coerce.number().int().positive().default(5000),
+  MAX_CHANNEL_FETCH_PAGE_SIZE: z.coerce.number().int().positive().max(100).default(100),
   CHANNEL_FETCH_DELAY_MS: z.coerce.number().int().nonnegative().default(250),
+  CHANNEL_FETCH_MIN_DELAY_MS: z.coerce.number().int().nonnegative().default(100),
+  CHANNEL_FETCH_DEFAULT_PROFILE: z
+    .enum(["quick-preview", "standard-fetch", "deep-balanced", "deep-aggressive", "recent-sync", "historical-backfill", "custom-expert"])
+    .default("deep-balanced"),
+  CHANNEL_FETCH_JOB_TTL_HOURS: z.coerce.number().int().positive().default(72),
+  TEMP_MANIFEST_TTL_HOURS: z.coerce.number().int().positive().default(72),
 });
 
 function isSupabaseDirectHost(raw: string) {
@@ -113,11 +124,22 @@ export function getDailymotionConfig() {
   };
 }
 
-export function getFetchSafetyConfig() {
+export function getFetchSafetyConfig(): FetchSafetyCaps {
+  // These values are server-side hard caps for Dailymotion collection work.
+  // Channel Explorer UI settings are only requests; route handlers must clamp
+  // them here so browser state cannot create unlimited or unsafe fetches.
   return {
-    maxPages: optionalServerEnv.MAX_CHANNEL_FETCH_PAGES,
+    legacyMaxPages: optionalServerEnv.MAX_CHANNEL_FETCH_PAGES,
     maxItems: optionalServerEnv.MAX_CHANNEL_FETCH_ITEMS,
-    delayMs: optionalServerEnv.CHANNEL_FETCH_DELAY_MS,
+    maxTotalPages: optionalServerEnv.MAX_CHANNEL_FETCH_TOTAL_PAGES,
+    maxWindows: optionalServerEnv.MAX_CHANNEL_FETCH_WINDOWS,
+    maxWindowDepth: optionalServerEnv.MAX_CHANNEL_FETCH_WINDOW_DEPTH,
+    maxPageSize: optionalServerEnv.MAX_CHANNEL_FETCH_PAGE_SIZE,
+    defaultDelayMs: optionalServerEnv.CHANNEL_FETCH_DELAY_MS,
+    minDelayMs: optionalServerEnv.CHANNEL_FETCH_MIN_DELAY_MS,
+    defaultProfile: optionalServerEnv.CHANNEL_FETCH_DEFAULT_PROFILE as FetchProfile,
+    jobTtlHours: optionalServerEnv.CHANNEL_FETCH_JOB_TTL_HOURS,
+    tempManifestTtlHours: optionalServerEnv.TEMP_MANIFEST_TTL_HOURS,
     manifestPersistenceEnabled: optionalServerEnv.ENABLE_MANIFEST_PERSISTENCE === "true",
   };
 }

@@ -4,16 +4,23 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadProjectEnv } from "./load-project-env.mjs";
+import { applyPrismaCommandConnectionDefaults } from "./prisma-command-env.mjs";
 
 loadProjectEnv();
 
+const prismaCliPath = path.join(process.cwd(), 'node_modules', 'prisma', 'build', 'index.js');
+
 function runCommand(command, args, options = {}) {
-  const result = spawnSync(command, args, {
-    encoding: 'utf8',
-    shell: process.platform === 'win32',
-    env: process.env,
-    ...options,
-  });
+  const { retryOnP1001 = false, retryMessage, ...spawnOptions } = options;
+  let result = spawnCommand(command, args, spawnOptions);
+
+  // The guarded apply flow targets Supabase Session Pooler through Prisma's
+  // migration engine. A single P1001 can occur after the lightweight preflight
+  // succeeds, so retry only the same engine command once and then fail closed.
+  if (retryOnP1001 && commandFailed(result) && /P1001/.test(commandOutput(result))) {
+    console.warn(retryMessage || `[WARN] Retrying ${command} ${args.join(' ')} once after P1001 reachability failure.`);
+    result = spawnCommand(command, args, spawnOptions);
+  }
 
   writeOutput(result.stdout, process.stdout);
   writeOutput(result.stderr, process.stderr);
@@ -31,6 +38,33 @@ function runCommand(command, args, options = {}) {
   if (typeof result.status === 'number' && result.status !== 0) {
     process.exit(result.status);
   }
+}
+
+function runPrismaCommand(args, options = {}) {
+  runCommand(process.execPath, [prismaCliPath, ...args], options);
+}
+
+function resolveCommand(command) {
+  if (process.platform !== 'win32') return command;
+  if (command === 'npx') return 'npx.cmd';
+  if (command === 'npm') return 'npm.cmd';
+  return command;
+}
+
+function spawnCommand(command, args, options = {}) {
+  return spawnSync(resolveCommand(command), args, {
+    encoding: 'utf8',
+    env: process.env,
+    ...options,
+  });
+}
+
+function commandOutput(result) {
+  return `${result.stdout || ''}\n${result.stderr || ''}`;
+}
+
+function commandFailed(result) {
+  return Boolean(result.error) || (typeof result.status === 'number' && result.status !== 0);
 }
 
 function redact(text = '') {
@@ -118,20 +152,30 @@ function validateMigrationHistory() {
 function main() {
   console.log('[INFO] Running migration preflight checks...');
   runCommand('node', ['scripts/db-validate-env.mjs']);
+  applyPrismaCommandConnectionDefaults();
   validateEnv();
   validateMigrationHistory();
 
   console.log('[INFO] Checking migration status...');
-  runCommand('node', ['scripts/db-status.mjs', '--skip-validation', '--allow-status-failure']);
+  runCommand('node', ['scripts/db-status.mjs', '--skip-validation', '--allow-status-failure'], {
+    retryOnP1001: true,
+    retryMessage: '[WARN] Retrying guarded migration status check once after P1001 reachability failure.',
+  });
 
   console.log('[INFO] Applying pending migrations (prisma migrate deploy)...');
-  runCommand('npx', ['prisma', 'migrate', 'deploy']);
+  runPrismaCommand(['migrate', 'deploy'], {
+    retryOnP1001: true,
+    retryMessage: '[WARN] Retrying prisma migrate deploy once after P1001 reachability failure.',
+  });
 
   console.log('[INFO] Regenerating Prisma client...');
-  runCommand('npx', ['prisma', 'generate']);
+  runPrismaCommand(['generate']);
 
   console.log('[INFO] Re-checking migration status...');
-  runCommand('node', ['scripts/db-status.mjs', '--skip-validation']);
+  runCommand('node', ['scripts/db-status.mjs', '--skip-validation'], {
+    retryOnP1001: true,
+    retryMessage: '[WARN] Retrying final migration status check once after P1001 reachability failure.',
+  });
 
   console.log('[OK] Database migration apply workflow completed successfully.');
 }

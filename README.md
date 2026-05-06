@@ -48,6 +48,8 @@ aws-0-<region>.pooler.supabase.com
 
 If your Supabase password contains reserved URL characters such as `#`, `@`, `?`, `/`, or `$`, percent-encode those characters before pasting the connection string.
 
+`db:status` and `db:apply` add `connect_timeout=30` to Prisma CLI child processes when `DATABASE_URL` has no explicit `connect_timeout`. This is a process-only Supabase P1001 hardening default; it does not rewrite your `.env` file or change the target database. Override it with `PRISMA_CONNECT_TIMEOUT_SECONDS` only if you have a specific reason.
+
 Windows PowerShell and online terminals should use a root `.env.local`:
 
 ```powershell
@@ -82,23 +84,18 @@ Commands:
 
 `npm run db:status` is intentionally wrapped by `scripts/db-status.mjs` instead of calling Prisma directly. Prisma 7 can return a bare `Schema engine error:` from `prisma migrate status`; the wrapper first runs a non-mutating `SELECT 1` through Prisma so authentication, reachability, and URL-format failures are reported with concrete Prisma error codes such as `P1000` or `P1001`.
 
-For the Supabase Session Pooler URL on port `5432`, the current Supabase Prisma guide does not require `pgbouncer=true`. Keep the copied Session Pooler URL as the `DATABASE_URL` value unless official Supabase or Prisma troubleshooting for your exact pooler mode says to add a query parameter.
+For the Supabase Session Pooler URL on port `5432`, this repo keeps the copied Session Pooler URL as the `DATABASE_URL` value and applies the timeout hardening in the scripts. Do not add `pgbouncer=true` to the Session Pooler URL unless official troubleshooting for your exact pooler mode calls for it.
 
-### Missing Migration History
+### Migration History And Apply Status
 
-This repository currently needs a reviewed Prisma migration history before `db:apply` can deploy schema changes. `schema.prisma` alone is not enough for production/staging deploys; Prisma expects committed files under `prisma/migrations`.
+The reviewed Prisma migration history now exists under `prisma/migrations`, and `20260506_channel_deep_fetch_history_persistence_foundation` has been applied to the configured Supabase target used in this workspace. Future databases or restored environments must still be checked with `npm run db:status` before applying migrations.
 
-Safe baseline path, without applying anything automatically:
+Safe future apply path:
 
-1. Fix `DATABASE_URL` until `npm run db:status` reaches the migration-status phase without authentication or connectivity errors.
-2. Inspect the real target database state and decide whether it is empty, already matches `schema.prisma`, or needs a custom baseline.
-   Review-only diff command after credentials are fixed:
-   ```bash
-   npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script --output prisma-baseline-review.sql
-   ```
-3. Create a reviewed baseline migration file with Prisma Migrate tooling, then commit the full `prisma/migrations` folder including `migration_lock.toml`.
-4. If the real database already matches the baseline, use `prisma migrate resolve --applied <migration_name>` only after explicit human confirmation for that database.
-5. If the database is empty and the baseline is approved, use the guarded `CONFIRM_DB_APPLY=true npm run db:apply` path.
+1. Confirm `DATABASE_URL` points to the intended Supabase Session Pooler target.
+2. Run `npm run db:validate` and `npm run db:status`.
+3. Review any pending migration names and SQL before applying.
+4. Apply only with explicit confirmation: `CONFIRM_DB_APPLY=true npm run db:apply`.
 
 Production safety:
 
@@ -150,3 +147,50 @@ npm run build
 - `DAILYMOTION_API_KEY` is optional. Public metadata routes run without it where Dailymotion endpoints allow anonymous access.
 - `SUPABASE_SERVICE_ROLE_KEY` is optional and server-only for privileged flows.
 - AI route failures return controlled unavailable payloads when Gemini is not configured or temporarily unavailable.
+
+## Channel Explorer Deep Fetch
+
+`/channel-explorer` separates fetch settings from result filters:
+
+- Fetch settings control how public metadata is collected from Dailymotion.
+- Result filters only filter and sort videos already collected in the current manifest.
+- Filter changes never trigger Dailymotion API requests.
+- Fetch settings only start API work when the user explicitly starts or resumes a fetch.
+
+Fetch profiles:
+
+- `quick-preview`: one API page for source verification.
+- `standard-fetch`: one result window, bounded by `MAX_CHANNEL_FETCH_PAGES` for legacy compatibility.
+- `deep-balanced`: yearly windows that split capped years into months.
+- `deep-aggressive`: recursive year/month/week/day splitting within hard caps.
+- `recent-sync`: recent date-range collection.
+- `historical-backfill`: older date-range collection.
+- `custom-expert`: manual caps, window units, delay, and split behavior.
+
+Dailymotion can cap a single result window around 1000 videos. Deep fetch uses public `created_after` and `created_before` filters with bounded `limit`/`page` pagination, deduplicates by Dailymotion video ID, and never claims full coverage unless every planned window finishes without caps, failures, stops, or max-limit interruptions.
+
+Channel metadata requests use public profile metadata when available, including `videos_total`. The UI labels this as "Reported total from Dailymotion"; it is not a guaranteed collectable total because private, deleted, unavailable, or geo-restricted videos may affect comparison.
+
+Current persistence status:
+
+- Runtime fetch history/resume is real for the current server runtime session.
+- Durable database persistence is schema-applied, but runtime repositories are not wired into the Channel Explorer flow yet.
+- Temporary manifests and fetch jobs have TTL fields in the schema; canonical videos, video sources, saved videos, and collections are durable and must not be cleaned up by temporary-history retention.
+
+New server hard caps:
+
+- `MAX_CHANNEL_FETCH_TOTAL_PAGES`: total API pages across all windows.
+- `MAX_CHANNEL_FETCH_WINDOWS`: total date windows a job may plan/process.
+- `MAX_CHANNEL_FETCH_WINDOW_DEPTH`: maximum recursive split depth.
+- `MAX_CHANNEL_FETCH_PAGE_SIZE`: maximum Dailymotion page size, capped at 100.
+- `CHANNEL_FETCH_MIN_DELAY_MS`: minimum delay the browser cannot bypass.
+- `CHANNEL_FETCH_DEFAULT_PROFILE`: default fetch profile.
+- `CHANNEL_FETCH_JOB_TTL_HOURS` and `TEMP_MANIFEST_TTL_HOURS`: temporary operational retention.
+
+The migration foundation is expected under:
+
+```text
+prisma/migrations/20260506_channel_deep_fetch_history_persistence_foundation/migration.sql
+```
+
+Run `npm run db:status` before future applies and confirm the target database before setting `CONFIRM_DB_APPLY=true`.

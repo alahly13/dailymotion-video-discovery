@@ -6,10 +6,10 @@ import { fetchDailymotionChannelPage } from "./dailymotion-client";
 const fetchSafety = getFetchSafetyConfig();
 
 export const CHANNEL_FETCH_LIMITS = {
-  pageSize: 50,
-  maxPages: fetchSafety.maxPages,
+  pageSize: Math.min(50, fetchSafety.maxPageSize),
+  maxPages: fetchSafety.legacyMaxPages,
   maxVideos: fetchSafety.maxItems,
-  delayMs: fetchSafety.delayMs,
+  delayMs: fetchSafety.defaultDelayMs,
 };
 
 export async function fetchDailymotionChannelFirstPage(input: string, requestId: string, signal?: AbortSignal) {

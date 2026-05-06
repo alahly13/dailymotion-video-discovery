@@ -2,6 +2,34 @@
 
 Current database policy is defined by the newest entry below. Older entries are retained as historical record and may describe superseded `DIRECT_URL` behavior that is no longer active.
 
+## 2026-05-06 - Audit cleanup, Supabase P1001 hardening, and migration apply
+
+- Fixed the 5 moderate `npm audit` findings without using `npm audit fix --force`. The forced path wanted unsafe downgrades, so the repo now uses narrow overrides for `postcss@8.5.14` and `@hono/node-server@1.19.14`, plus a patch upgrade to `next@16.2.5`.
+- Kept `prisma` and `@prisma/client` pinned at `7.8.0`; `prisma@latest` is still `7.8.0`, and the Hono advisory is resolved through the transitive override rather than a Prisma major-line downgrade.
+- Added `scripts/prisma-command-env.mjs`. `db:status` and `db:apply` now add `connect_timeout=30` to Prisma CLI child processes only when `DATABASE_URL` has no explicit `connect_timeout`. This fixed the Supabase Session Pooler `P1001` reachability failure without editing the stored DB URL, reintroducing `DIRECT_URL`, or changing the target database.
+- Hardened DB scripts so Prisma commands run through the local CLI JS entrypoint with `process.execPath` instead of Windows shell/npx argument concatenation.
+- Applied `prisma/migrations/20260506_channel_deep_fetch_history_persistence_foundation/migration.sql` to the configured Supabase Session Pooler target. A second guarded `db:apply` run verified there are no pending migrations.
+- Schema audit result: the canonical tables are now `video_sources`, `videos`, `collections`, `saved_videos`, `manifests`, `manifest_items`, `fetch_jobs`, `fetch_windows`, `fetch_page_attempts`, `source_catalog_snapshots`, and `fetch_job_events`. No runtime Prisma client reads/writes were found in `src`, so persistence remains schema-applied but not wired into product repositories.
+- Verification: `npm audit` passed with 0 vulnerabilities; script syntax checks passed; `npx prisma validate` passed; `npm run db:validate` passed; `npm run db:status` passed and reported the schema up to date; guarded `npm run db:apply` completed; `npx prisma generate` passed; `npm run typecheck` passed; `npm run build` passed on Next.js 16.2.5.
+- Remaining blocked verification: `npm run lint` still fails because the existing script calls removed Next.js 16 command `next lint`, which Next interprets as a project directory named `lint`.
+- Safety: no `DIRECT_URL`, Supabase direct host workflow, `prisma db push`, `prisma migrate reset`, drops, or table deletion commands were introduced. Secrets were not intentionally printed.
+
+## 2026-05-06 - Channel Explorer deep fetch, metadata, runtime history, coverage, and Prisma persistence foundation
+
+- Read `Guide-Files/dailymotion_channel_deep_fetch_persistence_guide_2026.md`, current ledgers/docs, Prisma config/schema, DB scripts, Channel Explorer UI, Dailymotion routes/services, manifest/filter types, stores, local Next.js 16 docs, and current official Dailymotion/Prisma/Supabase/Vercel docs before editing.
+- Added a server-clamped fetch settings/profile system for `quick-preview`, `standard-fetch`, `deep-balanced`, `deep-aggressive`, `recent-sync`, `historical-backfill`, and `custom-expert`.
+- Added Dailymotion public profile metadata support through `POST /api/dailymotion/channel/metadata`, including honest handling of `videos_total` as "Reported total from Dailymotion" rather than a guaranteed catalog total.
+- Added route-backed runtime-memory fetch jobs with chunked `jobs/start`, `jobs/next`, `jobs/stop`, `jobs/[id]/status`, `history`, and `coverage` endpoints. This gives real resume checkpoints for the current server runtime session, while clearly not claiming durable DB persistence yet.
+- Added a deep time-window fetch service using `created_after` / `created_before`, Dailymotion page-size caps, provider-window cap detection around 1000 results, recursive window splitting, dedupe by Dailymotion video ID, partial manifest preservation, and honest completeness statuses.
+- Split Channel Explorer UI into source input, channel metadata, fetch configuration, progress, runtime fetch history, coverage, manifest summary, result filters, active filter chips, and results. Result filters remain manifest-only and never trigger provider fetches.
+- Upgraded `prisma/schema.prisma` to a snake_case-mapped Prisma/Postgres foundation with durable `VideoSource`, `Video`, `Collection`, `SavedVideo`, `SourceCatalogSnapshot` and temporary/operational `Manifest`, `ManifestItem`, `FetchJob`, `FetchWindow`, `FetchPageAttempt`, `FetchJobEvent` models.
+- Created reviewed migration files under `prisma/migrations/20260506_channel_deep_fetch_history_persistence_foundation/` plus `prisma/migrations/migration_lock.toml`. The migration enables RLS without broad public policies.
+- Added deep-fetch env hard caps: `MAX_CHANNEL_FETCH_WINDOWS`, `MAX_CHANNEL_FETCH_WINDOW_DEPTH`, `MAX_CHANNEL_FETCH_TOTAL_PAGES`, `MAX_CHANNEL_FETCH_PAGE_SIZE`, `CHANNEL_FETCH_MIN_DELAY_MS`, `CHANNEL_FETCH_DEFAULT_PROFILE`, `CHANNEL_FETCH_JOB_TTL_HOURS`, and `TEMP_MANIFEST_TTL_HOURS`.
+- Preserved the active DB policy: `DATABASE_URL` only, Supabase Session Pooler expected, no `DIRECT_URL`, no Supabase direct host workflow.
+- Verification: `npx prisma validate` passed; `npm run typecheck` passed; `npx prisma generate` passed; `npm run db:validate` passed with sanitized output; `npm run db:status` reached migration status and reported the new migration pending; `npm run build` passed; local dev server started on `http://localhost:3000` and `GET /channel-explorer` returned HTTP 200.
+- Blocked verification: `npm run lint` is blocked by the pre-existing stale `next lint` script, which is removed in Next.js 16 and currently errors with an invalid `lint` project-directory message. Live Dailymotion API smoke tests from PowerShell were blocked by DNS resolution failure for `api.dailymotion.com`.
+- Safety: migration was not applied; `db:apply` was not run; no `prisma migrate reset`, `prisma db push`, drops, or destructive DB commands were run; no secrets were intentionally printed; no downloading, scraping, private/protected Dailymotion access, rehosting, or fabricated video/count behavior was added.
+
 ## 2026-05-06 - Prisma schema-engine status diagnostics and migration-history guard
 
 - Diagnosed the remaining `npm run db:status` failure after the `DATABASE_URL`-only cutover. Raw `npx prisma migrate status` still targets the Supabase Session Pooler host from `DATABASE_URL`, but Prisma returns only `Error: Schema engine error:`.

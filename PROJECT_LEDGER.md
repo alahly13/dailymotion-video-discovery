@@ -31,3 +31,18 @@
 - Updated `.env.example` and README docs for Vercel-first workflows and required/optional env behavior.
 - Verification: `npm run typecheck` currently fails due to pre-existing type issues in this patch (see command output).
 - Limitation: full persisted fetch-job resume flow is not yet implemented; this change preserves partial manifest in API/UI response for safe retry UX.
+
+## 2026-05-06 — Online-first Prisma migration workflow for Supabase/Postgres
+
+- Added professional online-first migration scripts in `package.json`: `db:validate`, `db:status`, `db:apply`, `db:migrate:deploy`, `db:create-migration`, `db:generate`, and `db:studio`.
+- Created `scripts/db-validate-env.mjs` to require `DATABASE_URL` + `DIRECT_URL`, validate PostgreSQL URL format, and print only sanitized metadata (no secrets).
+- Created `scripts/db-apply.mjs` to run safe preflight checks, require `CONFIRM_DB_APPLY=true` for production-like targets, execute `prisma migrate status`, `prisma migrate deploy`, and `prisma generate`.
+- Added manual GitHub Actions workflow `.github/workflows/db-migrate.yml` with `workflow_dispatch` trigger only for safer controlled migration runs.
+- Updated `.env.example` with explicit comments for `DATABASE_URL` (runtime) vs `DIRECT_URL` (migration/direct), Supabase Dashboard source, and secrets handling guidance.
+- Expanded README with online migration workflow, Codespaces execution path, GitHub Actions manual flow, safety rules, command differences, and troubleshooting.
+- Safety guarantee: no destructive commands were added (`prisma migrate reset` not used, no table drops, no auto-delete behavior).
+- Tests run in this environment:
+  - `npm run db:validate` with mocked safe PostgreSQL URLs: passed.
+  - `npm run db:status`: blocked here due to unavailable real database connection/secrets.
+  - `npm run db:apply`: intentionally not executed against unknown/unconfigured database in this environment.
+  - `npm run typecheck`: failed due to pre-existing project TypeScript issues unrelated to this migration workflow update.

@@ -1,5 +1,15 @@
 # Project Ledger
 
+
+## 2026-05-06 — Prisma 7.8 datasource config fix for Session Pooler workflows
+
+- Added root `prisma.config.ts` and moved datasource `url`/`directUrl` resolution there using `prisma/config` + `env()` for Prisma CLI 7.8 compatibility.
+- Kept `prisma/schema.prisma` datasource block provider-only (`postgresql`) to avoid Prisma 7 schema/config incompatibility errors.
+- Preserved online-first Supabase guidance: `DATABASE_URL` uses Session Pooler, and `DIRECT_URL` may safely equal `DATABASE_URL` in IPv4-only Vercel/Codespaces/GitHub Actions environments.
+- Updated README with explicit Prisma 7.8 datasource config behavior and Session Pooler mapping notes.
+- Safety: no resets/drops/destructive commands; no secrets printed or hardcoded.
+- Verification in this environment: `npm run db:validate` passed with placeholder env; `npm run db:status` could not run without configured DB env access; `npm run typecheck` still reports pre-existing project TypeScript issues unrelated to this Prisma config fix.
+
 ## 2026-05-06 — MVP foundation and Channel Explorer
 
 - Created a strict TypeScript Next.js App Router foundation with Tailwind CSS, shadcn-style primitives, Framer Motion dependency, Prisma SQLite schema, and server/public env separation.

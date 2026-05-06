@@ -42,6 +42,13 @@ This project uses committed Prisma migration files plus `prisma migrate deploy` 
 - Get both in **Supabase Dashboard → Connect**.
 - Configure both as secrets/environment variables in Codespaces, GitHub Actions, and Vercel.
 
+### Prisma 7.8+ datasource configuration
+
+- Prisma CLI 7.8+ reads datasource `url`/`directUrl` from `prisma.config.ts` (not from `schema.prisma`).
+- This repo keeps `provider = "postgresql"` in `prisma/schema.prisma` and resolves connection strings from env via `prisma.config.ts`.
+- `DATABASE_URL` and `DIRECT_URL` remain required, server-only, and sanitized by `npm run db:validate`.
+- For Supabase Session Pooler workflows in Vercel/Codespaces, `DIRECT_URL` may equal `DATABASE_URL`.
+
 ### Difference between `db:apply` and `db:create-migration`
 
 - `db:create-migration` creates new migration files during development and review.

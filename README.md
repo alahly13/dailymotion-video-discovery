@@ -45,6 +45,7 @@ This project uses committed Prisma migration files plus `prisma migrate deploy` 
 ### Prisma 7.8+ datasource configuration
 
 - Prisma CLI 7.8+ reads datasource `url`/`directUrl` from `prisma.config.ts` (not from `schema.prisma`).
+- In this repo, Prisma CLI commands (`migrate status`/`deploy`/`dev`) resolve datasource URL as `DIRECT_URL` first, with `DATABASE_URL` fallback when `DIRECT_URL` is unset.
 - This repo keeps `provider = "postgresql"` in `prisma/schema.prisma` and resolves connection strings from env via `prisma.config.ts`.
 - `DATABASE_URL` and `DIRECT_URL` remain required, server-only, and sanitized by `npm run db:validate`.
 - For Supabase Session Pooler workflows in Vercel/Codespaces, `DIRECT_URL` may equal `DATABASE_URL`.

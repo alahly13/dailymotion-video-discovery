@@ -1,6 +1,14 @@
 # Project Ledger
 
 
+## 2026-05-06 — Prisma CLI DIRECT_URL precedence verification
+
+- Audited `prisma.config.ts`, `package.json` db scripts, `scripts/db-apply.mjs`, and `scripts/db-validate-env.mjs` to verify migration/status/deploy flow.
+- Updated `prisma.config.ts` so Prisma CLI datasource resolution prefers `DIRECT_URL`, falling back to `DATABASE_URL` only when `DIRECT_URL` is unset/blank.
+- Confirmed existing validation/apply scripts still require both env vars and explicitly allow `DIRECT_URL === DATABASE_URL` for Supabase Session Pooler workflows.
+- Updated README Prisma 7.8 config section to document DIRECT_URL-first CLI resolution and DATABASE_URL fallback behavior.
+- Safety: no destructive commands run; no secrets printed or hardcoded.
+
 ## 2026-05-06 — GitHub Actions migration workflow hardening audit
 
 - Audited and updated `.github/workflows/db-migrate.yml` for manual `workflow_dispatch`-only execution with required inputs (`confirm`, `environment`, `run_apply`).

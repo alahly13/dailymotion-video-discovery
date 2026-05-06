@@ -80,16 +80,37 @@ This project uses committed Prisma migration files plus `prisma migrate deploy` 
 A manual workflow is available at `.github/workflows/db-migrate.yml`.
 
 - Workflow name: **Apply database migrations**
-- Trigger: `workflow_dispatch` only (manual)
+- Trigger: `workflow_dispatch` only (manual, never on push/pull_request/schedule)
+- Configure secrets in: **GitHub repo → Settings → Secrets and variables → Actions**
 - Required repository secrets:
   - `DATABASE_URL`
   - `DIRECT_URL`
-- Run sequence:
-  1. Checkout repository
-  2. Setup latest Node.js LTS
-  3. Install dependencies (`npm ci` if lockfile exists, otherwise `npm install`)
-  4. `npm run db:validate`
-  5. `CONFIRM_DB_APPLY=true npm run db:apply`
+- For IPv4-first online workflows, both `DATABASE_URL` and `DIRECT_URL` may use the Supabase Session Pooler URL.
+
+### Manual run steps
+
+1. Open **GitHub repo → Actions → Apply database migrations**.
+2. Click **Run workflow**.
+3. Select inputs:
+   - `environment`: `production`, `preview`, or `staging` (audit label only).
+   - `run_apply`:
+     - `true` = run pre-checks + apply migrations.
+     - `false` = status-only mode (pre/post status checks without apply).
+   - `confirm`: must be `APPLY` (or `true`) when `run_apply=true`.
+4. Run workflow.
+
+### Workflow safety sequence
+
+1. `npm run db:validate`
+2. `npm run db:status` (pre-check, fail-closed)
+3. Manual confirmation gate (for apply mode)
+4. `CONFIRM_DB_APPLY=true npm run db:apply` (internally runs `prisma migrate deploy`)
+5. `npm run db:status` (post-check)
+6. `npm run db:generate` (status-only mode, to verify Prisma CLI/tooling path)
+
+### Important deployment rule
+
+- Do **not** run production migrations from Vercel build hooks. Use this manual GitHub Actions workflow only.
 
 ## Production safety rules
 

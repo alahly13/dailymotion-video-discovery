@@ -1,9 +1,20 @@
 import { createChannelManifest } from "@/lib/manifests/channel-manifest";
+import {
+  channelDatabasePersistenceMode,
+  channelPersistenceUnavailableWarning,
+  decorateCoverageFallback,
+  getLatestPersistedChannelCoverage,
+  getPersistedChannelFetchJob,
+  getPersistedRuntimeJobData,
+  listPersistedChannelFetchHistory,
+  persistChannelFetchSnapshot,
+} from "@/lib/repositories/channel-fetch-persistence";
 import type {
   ChannelCoverage,
   ChannelFetchCompletenessStatus,
   ChannelFetchJobSnapshot,
   ChannelFetchSettings,
+  ChannelPersistenceMode,
   ChannelSourceMetadata,
   CoverageConfidence,
   FetchHistoryEntry,
@@ -23,7 +34,7 @@ import { analyzeDailymotionChannelInput, type DailymotionChannelAnalysis } from 
 const PROVIDER_WINDOW_ITEM_CAP = 1000;
 const DEFAULT_HISTORY_LIMIT = 25;
 
-type RuntimePersistence = "runtime-memory";
+type RuntimePersistence = ChannelPersistenceMode;
 
 interface RuntimeFetchWindow extends FetchWindowSummary {
   pageStart: number;
@@ -117,7 +128,7 @@ function providerMaxPage(pageSize: number) {
 }
 
 function windowId() {
-  return `window-${crypto.randomUUID()}`;
+  return crypto.randomUUID();
 }
 
 function buildWindow(unit: TimeWindowUnit, depth: number, windowStart: string | null, windowEnd: string | null, parentWindowId: string | null = null): RuntimeFetchWindow {
@@ -327,7 +338,9 @@ function buildHistoryEntry(job: RuntimeFetchJob): FetchHistoryEntry {
     cappedWindowCount: job.cappedWindowCount,
     failedWindowCount: job.failedWindowCount,
     resumable: job.resumable && terminalStatus(job.status) && job.status !== "complete",
+    currentResumeCheckpoint: job.lastSuccessfulCheckpoint ?? job.currentWindowId,
     persistence: "runtime-memory",
+    persistenceType: "temporary",
   };
 }
 
@@ -368,7 +381,32 @@ function snapshot(job: RuntimeFetchJob): ChannelFetchJobSnapshot {
     windows: job.windows,
     recentPageAttempts: job.pageAttempts.slice(-10),
     persistence: "runtime-memory",
+    persistenceType: "temporary",
   };
+}
+
+function withPersistence(snapshot: ChannelFetchJobSnapshot, persistence: RuntimePersistence, warning: string | null = null): ChannelFetchJobSnapshot {
+  return {
+    ...snapshot,
+    persistence,
+    persistenceType: "temporary",
+    persistenceWarning: warning,
+    metadata: snapshot.metadata ? { ...snapshot.metadata, persistence, persistenceWarning: warning } : null,
+    coverage: { ...snapshot.coverage, persistence, persistenceType: "temporary", persistenceWarning: warning },
+    historyEntry: { ...snapshot.historyEntry, persistence, persistenceType: "temporary", persistenceWarning: warning },
+  };
+}
+
+async function persistedSnapshot(job: RuntimeFetchJob) {
+  const currentSnapshot = snapshot(job);
+  if (channelDatabasePersistenceMode() !== "database") return currentSnapshot;
+
+  try {
+    await persistChannelFetchSnapshot(currentSnapshot);
+    return withPersistence(currentSnapshot, "database");
+  } catch (error) {
+    return withPersistence(currentSnapshot, "runtime-memory", channelPersistenceUnavailableWarning(error));
+  }
 }
 
 function cleanupExpiredJobs() {
@@ -413,8 +451,19 @@ export async function startChannelFetchJob(input: string, rawSettings: unknown, 
       existing.status = "running";
       existing.stoppedAt = null;
       existing.updatedAt = nowIso();
-      return { job: snapshot(existing), caps };
+      return { job: await persistedSnapshot(existing), caps };
     }
+
+    const persisted = await hydrateRuntimeJobFromDatabase(settings.resumeJobId);
+    if (persisted?.resumable) {
+      persisted.status = "running";
+      persisted.stoppedAt = null;
+      persisted.updatedAt = nowIso();
+      jobs.set(persisted.id, persisted);
+      return { job: await persistedSnapshot(persisted), caps };
+    }
+
+    throw new Error("Resume checkpoint was not found or is no longer resumable. Start a new fetch only if you want to collect from the beginning.");
   }
 
   const analysis = analyzeDailymotionChannelInput(input);
@@ -457,15 +506,71 @@ export async function startChannelFetchJob(input: string, rawSettings: unknown, 
   };
 
   jobs.set(id, job);
-  return { job: snapshot(job), caps };
+  return { job: await persistedSnapshot(job), caps };
+}
+
+async function hydrateRuntimeJobFromDatabase(jobId: string): Promise<RuntimeFetchJob | null> {
+  try {
+    const persisted = await getPersistedRuntimeJobData(jobId);
+    if (!persisted) return null;
+    const jobRecord = persisted.job;
+    const analysis = analyzeDailymotionChannelInput(jobRecord.sourceInput);
+    const metadata = persisted.metadata;
+    const items = persisted.items;
+    const windows: RuntimeFetchWindow[] = persisted.windows.map((window) => ({ ...window, pageStart: 1 }));
+    const pageAttempts = persisted.pageAttempts;
+    const coverage = persisted.snapshot.coverage;
+
+    // Hydration is the bridge that makes a database checkpoint executable again
+    // after a page refresh, server restart, or Vercel redeploy. Only temporary
+    // operational rows are loaded here; canonical videos/sources remain durable
+    // database truth and are not deleted by this runtime map.
+    return {
+      id: jobRecord.id,
+      sourceKey: sourceKeyForAnalysis(analysis),
+      analysis,
+      settings: persisted.settings,
+      metadata,
+      status: persisted.snapshot.status,
+      completenessStatus: persisted.snapshot.completenessStatus,
+      items,
+      seenVideoIds: new Set(items.map((item) => item.id)),
+      windows,
+      pageAttempts,
+      currentWindowId: jobRecord.currentWindowId,
+      pagesFetched: jobRecord.pagesFetched,
+      windowsProcessed: jobRecord.windowsProcessed,
+      duplicateCount: Number(jobRecord.duplicateCount),
+      cappedWindowCount: jobRecord.cappedWindowCount,
+      failedWindowCount: jobRecord.failedWindowCount,
+      maxItemsReached: persisted.snapshot.status === "max_items_reached",
+      partialManifestPreserved: true,
+      resumable: jobRecord.resumable,
+      startedAt: jobRecord.startedAt?.toISOString() ?? null,
+      completedAt: jobRecord.completedAt?.toISOString() ?? null,
+      stoppedAt: jobRecord.stoppedAt?.toISOString() ?? null,
+      createdAt: jobRecord.createdAt.toISOString(),
+      updatedAt: jobRecord.updatedAt.toISOString(),
+      expiresAt: jobRecord.expiresAt?.toISOString() ?? addHours(new Date(), getFetchTtlFallbackHours()).toISOString(),
+      lastError: typeof jobRecord.errorJson === "object" && jobRecord.errorJson && "message" in jobRecord.errorJson ? String(jobRecord.errorJson.message) : null,
+      lastSuccessfulCheckpoint: coverage.latestSuccessfulCheckpoint,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function getFetchTtlFallbackHours() {
+  return resolveChannelFetchSettings({}).caps.jobTtlHours;
 }
 
 export async function processNextChannelFetchChunk(jobId: string, signal?: AbortSignal) {
   cleanupExpiredJobs();
-  const job = jobs.get(jobId);
+  const job = jobs.get(jobId) ?? (await hydrateRuntimeJobFromDatabase(jobId));
   if (!job) throw new Error("Fetch job was not found or has expired.");
+  jobs.set(job.id, job);
   if (terminalStatus(job.status) && job.status !== "stopped" && job.status !== "failed" && job.status !== "partial") {
-    return snapshot(job);
+    return persistedSnapshot(job);
   }
 
   job.status = "running";
@@ -474,17 +579,17 @@ export async function processNextChannelFetchChunk(jobId: string, signal?: Abort
   const window = job.windows.find((candidate) => candidate.status === "running") ?? job.windows.find((candidate) => candidate.status === "pending");
   if (!window) {
     maybeFinishWhenNoPending(job);
-    return snapshot(job);
+    return persistedSnapshot(job);
   }
 
   if (job.pagesFetched >= job.settings.maxTotalPages) {
     finishJob(job, "partial");
-    return snapshot(job);
+    return persistedSnapshot(job);
   }
 
   if (job.windowsProcessed >= job.settings.maxWindows && window.status === "pending") {
     finishJob(job, "partial");
-    return snapshot(job);
+    return persistedSnapshot(job);
   }
 
   window.status = "running";
@@ -494,7 +599,7 @@ export async function processNextChannelFetchChunk(jobId: string, signal?: Abort
   const pageNumber = window.nextPageToFetch;
   const requestParams = requestWindowParams(window);
   const attempt: FetchPageAttemptSummary = {
-    id: `attempt-${crypto.randomUUID()}`,
+    id: crypto.randomUUID(),
     fetchWindowId: window.id,
     pageNumber,
     limit: job.settings.pageSize,
@@ -520,7 +625,7 @@ export async function processNextChannelFetchChunk(jobId: string, signal?: Abort
     job.status = page.reason === "unauthorized" ? "auth_or_provider_limited" : page.reason === "rate_limited" ? "provider_limited" : "failed";
     job.pageAttempts.push(attempt);
     job.updatedAt = nowIso();
-    return snapshot(job);
+    return persistedSnapshot(job);
   }
 
   attempt.itemsReturned = page.data.items.length;
@@ -574,13 +679,14 @@ export async function processNextChannelFetchChunk(jobId: string, signal?: Abort
 
   job.updatedAt = nowIso();
   if (!terminalStatus(job.status) && job.settings.delayMs > 0) await delay(job.settings.delayMs);
-  return snapshot(job);
+  return persistedSnapshot(job);
 }
 
-export function stopChannelFetchJob(jobId: string) {
+export async function stopChannelFetchJob(jobId: string) {
   cleanupExpiredJobs();
-  const job = jobs.get(jobId);
+  const job = jobs.get(jobId) ?? (await hydrateRuntimeJobFromDatabase(jobId));
   if (!job) throw new Error("Fetch job was not found or has expired.");
+  jobs.set(job.id, job);
   const now = nowIso();
   job.status = "stopped";
   job.stoppedAt = now;
@@ -588,17 +694,36 @@ export function stopChannelFetchJob(jobId: string) {
   job.currentWindowId = null;
   const runningWindow = job.windows.find((window) => window.status === "running");
   if (runningWindow) runningWindow.status = "pending";
-  return snapshot(job);
+  return persistedSnapshot(job);
 }
 
-export function getChannelFetchJob(jobId: string) {
+export async function getChannelFetchJob(jobId: string) {
   cleanupExpiredJobs();
   const job = jobs.get(jobId);
-  return job ? snapshot(job) : null;
+  if (job) return persistedSnapshot(job);
+
+  try {
+    return await getPersistedChannelFetchJob(jobId);
+  } catch {
+    return null;
+  }
 }
 
-export function listChannelFetchHistory(sourceKey?: string, limit = DEFAULT_HISTORY_LIMIT): FetchHistoryEntry[] {
+export async function listChannelFetchHistory(sourceKey?: string, limit = DEFAULT_HISTORY_LIMIT): Promise<FetchHistoryEntry[]> {
   cleanupExpiredJobs();
+  if (channelDatabasePersistenceMode() === "database") {
+    try {
+      return await listPersistedChannelFetchHistory(sourceKey, limit);
+    } catch (error) {
+      const warning = channelPersistenceUnavailableWarning(error);
+      return [...jobs.values()]
+        .filter((job) => !sourceKey || job.sourceKey === sourceKey)
+        .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+        .slice(0, limit)
+        .map((job) => ({ ...buildHistoryEntry(job), persistenceWarning: warning }));
+    }
+  }
+
   return [...jobs.values()]
     .filter((job) => !sourceKey || job.sourceKey === sourceKey)
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
@@ -606,12 +731,24 @@ export function listChannelFetchHistory(sourceKey?: string, limit = DEFAULT_HIST
     .map(buildHistoryEntry);
 }
 
-export function getLatestChannelCoverage(sourceKey: string): ChannelCoverage | null {
+export async function getLatestChannelCoverage(sourceKey: string): Promise<ChannelCoverage | null> {
   cleanupExpiredJobs();
+  if (channelDatabasePersistenceMode() === "database") {
+    try {
+      return await getLatestPersistedChannelCoverage(sourceKey);
+    } catch (error) {
+      const warning = channelPersistenceUnavailableWarning(error);
+      const latest = [...jobs.values()]
+        .filter((job) => job.sourceKey === sourceKey)
+        .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0];
+      return decorateCoverageFallback(latest ? buildCoverage(latest) : null, warning);
+    }
+  }
+
   const latest = [...jobs.values()]
     .filter((job) => job.sourceKey === sourceKey)
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0];
   return latest ? buildCoverage(latest) : null;
 }
 
-export const runtimeFetchPersistence: RuntimePersistence = "runtime-memory";
+export const runtimeFetchPersistence: RuntimePersistence = channelDatabasePersistenceMode();

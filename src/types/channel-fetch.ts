@@ -1,6 +1,9 @@
 import type { ChannelManifest } from "./manifest";
 import type { NormalizedVideoMetadata } from "./video";
 
+export type ChannelPersistenceMode = "runtime-memory" | "database";
+export type ChannelPersistenceType = "temporary" | "durable";
+
 export type FetchProfile =
   | "quick-preview"
   | "standard-fetch"
@@ -22,7 +25,8 @@ export type ChannelFetchCompletenessStatus =
   | "max_items_reached"
   | "timeout_limited"
   | "provider_limited"
-  | "auth_or_provider_limited";
+  | "auth_or_provider_limited"
+  | "expired";
 
 export type CoverageConfidence = "high" | "medium" | "low" | "unknown";
 
@@ -37,7 +41,8 @@ export type FetchJobStatus =
   | "max_items_reached"
   | "timeout_limited"
   | "provider_limited"
-  | "auth_or_provider_limited";
+  | "auth_or_provider_limited"
+  | "expired";
 
 export type FetchWindowStatus = "pending" | "running" | "complete" | "capped" | "split" | "failed" | "stopped" | "skipped";
 
@@ -93,6 +98,9 @@ export interface ChannelSourceMetadata {
   reportedTotalCheckedAt: string | null;
   metadataJson: unknown | null;
   metadataUnavailableReason?: string | null;
+  persistedSourceId?: string | null;
+  persistence?: ChannelPersistenceMode;
+  persistenceWarning?: string | null;
 }
 
 export interface ChannelCoverage {
@@ -110,6 +118,9 @@ export interface ChannelCoverage {
   latestSuccessfulCheckpoint: string | null;
   lastResumePoint: string | null;
   warning: string | null;
+  persistence?: ChannelPersistenceMode;
+  persistenceWarning?: string | null;
+  persistenceType?: ChannelPersistenceType;
 }
 
 export interface FetchWindowSummary {
@@ -180,7 +191,10 @@ export interface FetchHistoryEntry {
   cappedWindowCount: number;
   failedWindowCount: number;
   resumable: boolean;
-  persistence: "runtime-memory" | "database";
+  currentResumeCheckpoint?: string | null;
+  persistence: ChannelPersistenceMode;
+  persistenceType?: ChannelPersistenceType;
+  persistenceWarning?: string | null;
 }
 
 export interface ChannelFetchJobSnapshot {
@@ -196,7 +210,9 @@ export interface ChannelFetchJobSnapshot {
   historyEntry: FetchHistoryEntry;
   windows: FetchWindowSummary[];
   recentPageAttempts: FetchPageAttemptSummary[];
-  persistence: "runtime-memory" | "database";
+  persistence: ChannelPersistenceMode;
+  persistenceType?: ChannelPersistenceType;
+  persistenceWarning?: string | null;
 }
 
 export interface ChannelFetchStartResponse {
@@ -204,6 +220,8 @@ export interface ChannelFetchStartResponse {
   job?: ChannelFetchJobSnapshot;
   metadata?: ChannelSourceMetadata | null;
   safetyCaps?: FetchSafetyCaps;
+  persistence?: ChannelPersistenceMode;
+  persistenceWarning?: string | null;
   error?: string;
   reason?: string | null;
 }
@@ -212,6 +230,8 @@ export interface ChannelFetchNextResponse {
   ok: boolean;
   job?: ChannelFetchJobSnapshot;
   done?: boolean;
+  persistence?: ChannelPersistenceMode;
+  persistenceWarning?: string | null;
   error?: string;
   reason?: string | null;
 }
@@ -220,6 +240,8 @@ export interface ChannelMetadataResponse {
   ok: boolean;
   metadata?: ChannelSourceMetadata;
   safetyCaps?: FetchSafetyCaps;
+  persistence?: ChannelPersistenceMode;
+  persistenceWarning?: string | null;
   error?: string;
   reason?: string | null;
 }
@@ -227,14 +249,16 @@ export interface ChannelMetadataResponse {
 export interface ChannelHistoryResponse {
   ok: boolean;
   history: FetchHistoryEntry[];
-  persistence: "runtime-memory" | "database";
+  persistence: ChannelPersistenceMode;
+  persistenceWarning?: string | null;
   error?: string;
 }
 
 export interface ChannelCoverageResponse {
   ok: boolean;
   coverage: ChannelCoverage | null;
-  persistence: "runtime-memory" | "database";
+  persistence: ChannelPersistenceMode;
+  persistenceWarning?: string | null;
   error?: string;
 }
 

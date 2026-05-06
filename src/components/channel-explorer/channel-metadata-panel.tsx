@@ -3,7 +3,7 @@
 import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import type { ChannelCoverage, ChannelSourceMetadata } from "@/types/channel-fetch";
+import type { ChannelCoverage, ChannelPersistenceMode, ChannelSourceMetadata } from "@/types/channel-fetch";
 
 function display(value: string | number | null | undefined) {
   return value === null || value === undefined || value === "" ? "Unavailable" : value;
@@ -17,13 +17,22 @@ export function ChannelMetadataPanel({
   metadata,
   coverage,
   loading,
+  persistence,
+  persistenceWarning,
   onRefresh,
 }: {
   metadata: ChannelSourceMetadata | null;
   coverage: ChannelCoverage | null;
   loading: boolean;
+  persistence: ChannelPersistenceMode;
+  persistenceWarning: string | null;
   onRefresh: () => void;
 }) {
+  const persisted = persistence === "database" && !persistenceWarning;
+  const persistenceCopy = persisted || (!metadata && !persistenceWarning)
+    ? "Source metadata snapshots are stored in the database when manifest persistence is enabled."
+    : persistenceWarning ?? "Persistence unavailable: history may reset after restart/deploy.";
+
   return (
     <Card className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -37,6 +46,10 @@ export function ChannelMetadataPanel({
           <RefreshCw className="h-4 w-4" aria-hidden="true" />
           Refresh Metadata
         </Button>
+      </div>
+
+      <div className="rounded-md border border-[var(--border)] bg-[var(--surface-muted)] p-3 text-sm leading-6 text-[var(--muted-foreground)]">
+        {persistenceCopy}
       </div>
 
       {!metadata ? (

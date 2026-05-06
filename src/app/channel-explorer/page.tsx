@@ -14,7 +14,7 @@ import { AdvancedFilterPanel } from "@/components/filters/advanced-filter-panel"
 import { VideoResultsGrid } from "@/components/video/video-results-grid";
 import { applyAdvancedVideoFilters } from "@/lib/filters/apply-advanced-video-filters";
 import { defaultAdvancedVideoFilters } from "@/lib/filters/filter-types";
-import type { ChannelCoverage, ChannelFetchJobSnapshot, ChannelFetchSettings, ChannelSourceMetadata, FetchHistoryEntry, FetchSafetyCaps } from "@/types/channel-fetch";
+import type { ChannelCoverage, ChannelCoverageResponse, ChannelFetchJobSnapshot, ChannelFetchSettings, ChannelFetchStartResponse, ChannelHistoryResponse, ChannelMetadataResponse, ChannelPersistenceMode, ChannelSourceMetadata, FetchHistoryEntry, FetchSafetyCaps } from "@/types/channel-fetch";
 import type { AdvancedVideoFilters } from "@/types/filters";
 import type { ChannelManifest } from "@/types/manifest";
 
@@ -48,6 +48,8 @@ export default function ChannelExplorerPage() {
   const [activeJob, setActiveJob] = useState<ChannelFetchJobSnapshot | null>(null);
   const [coverage, setCoverage] = useState<ChannelCoverage | null>(null);
   const [history, setHistory] = useState<FetchHistoryEntry[]>([]);
+  const [persistenceMode, setPersistenceMode] = useState<ChannelPersistenceMode>("runtime-memory");
+  const [persistenceWarning, setPersistenceWarning] = useState<string | null>(null);
   const [safetyCaps, setSafetyCaps] = useState<FetchSafetyCaps | null>(null);
   const [fetchSettings, setFetchSettings] = useState<ChannelFetchSettings>(defaultFetchSettings);
   const [filters, setFilters] = useState<AdvancedVideoFilters>(defaultAdvancedVideoFilters);
@@ -63,20 +65,30 @@ export default function ChannelExplorerPage() {
     setManifest(job.manifest);
     setMetadata(job.metadata);
     setCoverage(job.coverage);
+    setPersistenceMode(job.persistence);
+    setPersistenceWarning(job.persistenceWarning ?? job.coverage.persistenceWarning ?? null);
   }
 
   async function refreshHistory(sourceInput = input) {
     if (!sourceInput.trim()) return;
     const response = await fetch(`/api/dailymotion/channel/history?input=${encodeURIComponent(sourceInput)}`, { cache: "no-store" });
-    const data = await readJson<{ ok: boolean; history: FetchHistoryEntry[] }>(response);
-    if (data.ok) setHistory(data.history);
+    const data = await readJson<ChannelHistoryResponse>(response);
+    if (data.ok) {
+      setHistory(data.history);
+      setPersistenceMode(data.persistence);
+      setPersistenceWarning(data.persistenceWarning ?? data.history.find((entry) => entry.persistenceWarning)?.persistenceWarning ?? null);
+    }
   }
 
   async function refreshCoverage(sourceInput = input) {
     if (!sourceInput.trim()) return;
     const response = await fetch(`/api/dailymotion/channel/coverage?input=${encodeURIComponent(sourceInput)}`, { cache: "no-store" });
-    const data = await readJson<{ ok: boolean; coverage: ChannelCoverage | null }>(response);
-    if (data.ok) setCoverage(data.coverage);
+    const data = await readJson<ChannelCoverageResponse>(response);
+    if (data.ok) {
+      setCoverage(data.coverage);
+      setPersistenceMode(data.persistence);
+      setPersistenceWarning(data.persistenceWarning ?? data.coverage?.persistenceWarning ?? null);
+    }
   }
 
   async function analyze() {
@@ -100,8 +112,10 @@ export default function ChannelExplorerPage() {
   async function refreshMetadata() {
     if (!input.trim()) return;
     const response = await fetch("/api/dailymotion/channel/metadata", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ input }) });
-    const data = await readJson<{ ok: boolean; metadata?: ChannelSourceMetadata; safetyCaps?: FetchSafetyCaps; error?: string }>(response);
+    const data = await readJson<ChannelMetadataResponse>(response);
     if (data.safetyCaps) setSafetyCaps(data.safetyCaps);
+    if (data.persistence) setPersistenceMode(data.persistence);
+    setPersistenceWarning(data.persistenceWarning ?? data.metadata?.persistenceWarning ?? null);
     if (!response.ok && !data.metadata) throw new Error(data.error ?? "Metadata refresh failed.");
     if (data.metadata) setMetadata(data.metadata);
   }
@@ -145,8 +159,10 @@ export default function ChannelExplorerPage() {
         body: JSON.stringify({ input, requestId, settings: { ...fetchSettings, resumeJobId } }),
         signal: controller.signal,
       });
-      const data = await readJson<{ ok: boolean; job?: ChannelFetchJobSnapshot; safetyCaps?: FetchSafetyCaps; error?: string }>(response);
+      const data = await readJson<ChannelFetchStartResponse>(response);
       if (data.safetyCaps) setSafetyCaps(data.safetyCaps);
+      if (data.persistence) setPersistenceMode(data.persistence);
+      setPersistenceWarning(data.persistenceWarning ?? data.job?.persistenceWarning ?? null);
       if (!response.ok || !data.ok || !data.job) throw new Error(data.error ?? "Unable to start fetch.");
       applyJobSnapshot(data.job);
       const latest = data.job.status === "running" ? await continueJob(data.job.id, controller) : data.job;
@@ -182,7 +198,7 @@ export default function ChannelExplorerPage() {
         <p className="text-sm font-bold uppercase text-[var(--accent)]">Channel Explorer</p>
         <h1 className="max-w-4xl text-4xl font-black leading-tight sm:text-6xl">Build a public Dailymotion metadata catalog.</h1>
         <p className="max-w-3xl text-lg leading-8 text-[var(--muted-foreground)]">
-          Collect public channel metadata through explicit fetch profiles, track runtime checkpoints, preserve partial manifests, and filter only what has already been collected.
+          Collect public channel metadata through explicit fetch profiles, track database checkpoints when persistence is enabled, preserve partial manifests, and filter only what has already been collected.
         </p>
       </section>
 
@@ -190,12 +206,12 @@ export default function ChannelExplorerPage() {
       {analysis ? <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4 text-sm font-semibold text-[var(--success)]">Detected: {analysis}</div> : null}
       {error ? <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4 text-sm font-semibold text-[var(--danger)]">{error}</div> : null}
 
-      <ChannelMetadataPanel metadata={metadata} coverage={coverage} loading={loading} onRefresh={refreshMetadata} />
+      <ChannelMetadataPanel metadata={metadata} coverage={coverage} loading={loading} persistence={persistenceMode} persistenceWarning={persistenceWarning} onRefresh={refreshMetadata} />
       <ChannelFetchConfigPanel settings={fetchSettings} safetyCaps={safetyCaps} loading={loading} onChange={setFetchSettings} onStart={() => startFetch()} onReset={() => setFetchSettings(defaultFetchSettings)} />
-      <ChannelFetchProgress status={activeJob?.status ?? (loading ? "fetching" : manifest?.fetchStatus ?? "idle")} pagesFetched={activeJob?.progress.pagesFetched ?? manifest?.pagesFetched ?? 0} count={manifest?.items.length ?? 0} total={metadata?.reportedTotalFromApi ?? manifest?.totalKnownItems ?? null} progress={activeJob?.progress ?? null} />
-      <ChannelFetchHistoryPanel history={history} activeJobId={activeJob?.id ?? null} loading={loading} onResume={(jobId) => startFetch(jobId)} />
-      <ChannelCoveragePanel coverage={coverage} />
-      <ChannelManifestSummary manifest={manifest} />
+      <ChannelFetchProgress status={activeJob?.status ?? (loading ? "fetching" : manifest?.fetchStatus ?? "idle")} pagesFetched={activeJob?.progress.pagesFetched ?? manifest?.pagesFetched ?? 0} count={manifest?.items.length ?? 0} total={metadata?.reportedTotalFromApi ?? manifest?.totalKnownItems ?? null} progress={activeJob?.progress ?? null} persistence={persistenceMode} persistenceWarning={persistenceWarning} />
+      <ChannelFetchHistoryPanel history={history} activeJobId={activeJob?.id ?? null} loading={loading} persistence={persistenceMode} persistenceWarning={persistenceWarning} onResume={(jobId) => startFetch(jobId)} />
+      <ChannelCoveragePanel coverage={coverage} persistence={persistenceMode} persistenceWarning={persistenceWarning} />
+      <ChannelManifestSummary manifest={manifest} persistence={activeJob?.persistence ?? persistenceMode} />
       <AdvancedFilterPanel filters={filters} onChange={setFilters} onReset={() => setFilters(defaultAdvancedVideoFilters)} />
       <ActiveFilterChips filters={filters} />
       <div className="flex flex-wrap items-center justify-between gap-3">

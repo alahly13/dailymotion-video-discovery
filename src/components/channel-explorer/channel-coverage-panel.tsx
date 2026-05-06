@@ -1,15 +1,19 @@
 import { AlertTriangle } from "lucide-react";
 import { Card } from "@/components/ui/card";
-import type { ChannelCoverage } from "@/types/channel-fetch";
+import type { ChannelCoverage, ChannelPersistenceMode } from "@/types/channel-fetch";
 
 function valueText(value: string | number | null | undefined) {
   return value === null || value === undefined || value === "" ? "Unavailable" : value;
 }
 
-export function ChannelCoveragePanel({ coverage }: { coverage: ChannelCoverage | null }) {
+export function ChannelCoveragePanel({ coverage, persistence, persistenceWarning }: { coverage: ChannelCoverage | null; persistence: ChannelPersistenceMode; persistenceWarning: string | null }) {
+  const persisted = persistence === "database" && !persistenceWarning;
+  const persistenceCopy = persisted || (!coverage && !persistenceWarning)
+    ? "Coverage snapshots are stored in the database when manifest persistence is enabled."
+    : persistenceWarning ?? "Persistence unavailable: history may reset after restart/deploy.";
   const stats = [
-    ["API reported total", coverage?.reportedTotalFromApi ?? "Unavailable"],
-    ["Collected unique", coverage?.collectedUniqueVideos ?? 0],
+    ["Reported total from Dailymotion", coverage?.reportedTotalFromApi ?? "Unavailable"],
+    ["Collected unique public videos", coverage?.collectedUniqueVideos ?? 0],
     ["Estimated remaining", coverage?.estimatedRemainingVideos ?? "Unavailable"],
     ["Coverage percent", coverage?.coveragePercent !== null && coverage?.coveragePercent !== undefined ? `${coverage.coveragePercent.toFixed(2)}%` : "Unavailable"],
     ["Completeness", coverage?.coverageStatus ?? "unknown"],
@@ -28,6 +32,9 @@ export function ChannelCoveragePanel({ coverage }: { coverage: ChannelCoverage |
         <p className="mt-1 max-w-3xl text-sm leading-6 text-[var(--muted-foreground)]">
           Reported total depends on what Dailymotion exposes for this endpoint. If unavailable, the app shows collected unique videos and coverage status instead.
         </p>
+      </div>
+      <div className="rounded-md border border-[var(--border)] bg-[var(--surface-muted)] p-3 text-sm leading-6 text-[var(--muted-foreground)]">
+        {persistenceCopy}
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {stats.map(([label, value]) => (

@@ -5,7 +5,7 @@
   "description": "Manifest-based public video metadata discovery platform with a Dailymotion Channel Explorer MVP.",
   "scripts": {
     "dev": "next dev",
-    "build": "node scripts/app-validate-env.mjs && next build",
+    "build": "node scripts/app-validate-env.mjs && prisma generate && next build",
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@google/generative-ai": "latest",
+    "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "7.8.0",
     "@radix-ui/react-slot": "latest",
     "@supabase/ssr": "latest",
@@ -30,6 +31,7 @@
     "framer-motion": "latest",
     "lucide-react": "latest",
     "next": "^16.2.0",
+    "pg": "^8.20.0",
     "prisma": "7.8.0",
     "react": "latest",
     "react-dom": "latest",

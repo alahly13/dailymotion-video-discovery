@@ -2,7 +2,7 @@
 
 Updated: 2026-05-07
 Repo path: `F:\discovery\dailymotion-video-discovery`
-Scope: Project source-of-truth ledger, updated after the 2026-05-06 dependency audit cleanup, Supabase P1001 hardening, and Prisma migration apply.
+Scope: Project source-of-truth ledger, updated after wiring Channel Explorer database-backed fetch persistence.
 
 ## Table of Contents
 
@@ -23,6 +23,128 @@ Scope: Project source-of-truth ledger, updated after the 2026-05-06 dependency a
 - [Known Limitations](#known-limitations)
 - [Future Roadmap](#future-roadmap)
 - [Agent Instructions](#agent-instructions)
+
+## 2026-05-07 Channel Explorer Database-Backed Fetch Persistence
+
+**Scope**
+
+- Full-stack runtime persistence wiring for Channel Explorer history, resume checkpoints, manifests, source metadata, windows, page attempts, coverage, and UI status.
+- Documentation and ledger refresh for the now-wired database flow.
+
+**Official docs checked**
+
+- Prisma 7 migration deploy and Prisma Client setup, including the runtime requirement for a PostgreSQL driver adapter.
+- Supabase PostgreSQL/Prisma connection guidance for the Session Pooler `DATABASE_URL` workflow.
+- Next.js 16 route handler/runtime docs and repo-local docs under `node_modules/next/dist/docs/`.
+- Vercel Functions/runtime behavior docs, especially the need to avoid assuming in-memory state survives across deployments or serverless instances.
+
+**Files changed for this entry**
+
+- `package.json`
+- `package-lock.json`
+- `.env.example`
+- `README.md`
+- `PROJECT_LEDGER.md`
+- `dailymotion_discovery_ledger.md`
+- `Guide-Files/dailymotion_channel_deep_fetch_persistence_guide_2026.md`
+- `src/lib/prisma/client.ts`
+- `src/lib/repositories/channel-fetch-persistence.ts`
+- `src/lib/platforms/dailymotion/channel-deep-fetch-service.ts`
+- `src/types/channel-fetch.ts`
+- `src/app/channel-explorer/page.tsx`
+- `src/app/api/dailymotion/channel/metadata/route.ts`
+- `src/app/api/dailymotion/channel/history/route.ts`
+- `src/app/api/dailymotion/channel/coverage/route.ts`
+- `src/app/api/dailymotion/channel/jobs/start/route.ts`
+- `src/app/api/dailymotion/channel/jobs/next/route.ts`
+- `src/app/api/dailymotion/channel/jobs/stop/route.ts`
+- `src/app/api/dailymotion/channel/jobs/[id]/status/route.ts`
+- `src/app/api/dailymotion/channel/stop-fetch/route.ts`
+- `src/components/channel-explorer/channel-metadata-panel.tsx`
+- `src/components/channel-explorer/channel-fetch-progress.tsx`
+- `src/components/channel-explorer/channel-fetch-history-panel.tsx`
+- `src/components/channel-explorer/channel-coverage-panel.tsx`
+- `src/components/channel-explorer/channel-manifest-summary.tsx`
+
+**Database and migration truth**
+
+- Migration reviewed: yes.
+- Reviewed migration: `prisma/migrations/20260506_channel_deep_fetch_history_persistence_foundation/migration.sql`.
+- Review result: non-destructive creation DDL for enums, tables, indexes, foreign keys, and RLS enablement; no `DROP`, `DELETE`, `TRUNCATE`, `ALTER TABLE DROP`, reset, or `db push` path.
+- Migration applied this turn: no. `npm run db:status` reported the configured Supabase/Postgres target already has the single migration applied and the schema is up to date.
+- `db:apply` run this turn: no.
+- Destructive DB command run: no.
+- `DATABASE_URL` remains the only database URL used by runtime, Prisma CLI, status, apply, generate, and Studio workflows. `DIRECT_URL` was not restored.
+
+**Runtime persistence now wired**
+
+- Added `src/lib/prisma/client.ts`, a server-only Prisma helper using `@prisma/adapter-pg` and `pg` because Prisma 7 runtime clients require an explicit PostgreSQL adapter.
+- Added `src/lib/repositories/channel-fetch-persistence.ts` as the single Channel Explorer persistence layer.
+- `VideoSource` is upserted by platform, source type, and normalized external source identity.
+- Channel metadata fields are stored on `VideoSource`, including username/handle, display name, canonical URL, avatar/thumbnail, country/language, reported total, reported total field name, reported total checked time, and metadata JSON.
+- `SourceCatalogSnapshot` rows are created for metadata/job coverage snapshots.
+- `Video` rows are upserted by platform and platform video ID.
+- Temporary `Manifest` rows and `ManifestItem` rows are created/updated without duplicate manifest/video pairs.
+- `FetchJob`, `FetchWindow`, and `FetchPageAttempt` are created/updated during start/next/stop/status/history/coverage flows.
+- `FetchJobEvent` rows are written for persisted progress and terminal job snapshots so operators have a lightweight event/audit trail without storing noisy per-field churn.
+- Counters and checkpoints persisted include collected item counts, unique item counts, duplicate counts, pages fetched, windows processed, capped/failed window counts, current window, current page, and resume cursor JSON.
+
+**Temporary vs permanent data policy**
+
+- Temporary/operational: `FetchJob`, `FetchWindow`, `FetchPageAttempt`, `FetchJobEvent`, temporary `Manifest`, and temporary `ManifestItem`.
+- Permanent/canonical: `VideoSource`, `Video`, `SourceCatalogSnapshot`, `SavedVideo`, `Collection`, and durable `Manifest` rows only when explicitly marked durable.
+- Temporary jobs and manifests are written with `expiresAt`.
+- Cleanup was not introduced in this entry. No temporary cleanup path deletes canonical videos, sources, saved videos, or collections.
+
+**Route behavior**
+
+- `POST /api/dailymotion/channel/metadata` persists source metadata when DB persistence is enabled and returns database persistence metadata in the response.
+- `POST /api/dailymotion/channel/jobs/start` creates/persists source, manifest, job, and planned windows; resume can hydrate an old DB job after runtime memory is gone.
+- `POST /api/dailymotion/channel/jobs/next` persists API page attempts, upserts videos, inserts manifest items without duplicates, updates windows/jobs, and updates coverage/checkpoints after each chunk.
+- `POST /api/dailymotion/channel/jobs/stop` marks the job stopped/resumable and persists the checkpoint.
+- `GET /api/dailymotion/channel/jobs/[id]/status` reads DB-backed job graphs when runtime memory is absent.
+- `GET /api/dailymotion/channel/history` returns durable DB history rows for the source.
+- `GET /api/dailymotion/channel/coverage` calculates coverage from persisted job/source/window/page/video state.
+- When `ENABLE_MANIFEST_PERSISTENCE=false` or DB persistence is unavailable, routes fall back to runtime memory and return the UI warning: `Persistence unavailable: history may reset after restart/deploy.`
+
+**UI truth**
+
+- `/channel-explorer` keeps the required ordering: Source Input, Channel Metadata, Fetch Configuration, Fetch Progress, Fetch History, Channel Coverage, Manifest Summary, Result Filters, Result Grid, AI Helper.
+- UI panels now display persisted/runtime status, temporary/durable status, resumable checkpoints, reported Dailymotion totals, collected unique public videos, estimated remaining only when a reported total exists, coverage confidence, and honest coverage warnings.
+- History rows now include persistence and status badges for persisted/runtime, temporary, resumable, partial, capped, complete, failed, and stopped states.
+- Result filters remain separate from fetch settings; filters operate on the current manifest items and do not call the Dailymotion provider API.
+
+**Verification**
+
+- `npm run db:validate`: passed with sanitized Session Pooler metadata only.
+- `npm run db:status`: passed and reported `Database schema is up to date!`.
+- `npx prisma validate`: passed.
+- `npx prisma generate`: passed.
+- `npm run typecheck`: passed.
+- `npm run build`: passed on Next.js `16.2.5`; build now runs `prisma generate` before `next build`.
+- `npm run lint`: blocked by the existing stale `next lint` script, which Next.js 16 treats as an invalid project directory named `lint`.
+- Browser/tooling note: `agent-browser` was not installed. Playwright's bundled Chromium install timed out, but `npx playwright screenshot --channel msedge` loaded `/channel-explorer` and captured the page. Initial load showed a React hydration warning about browser-injected `caret-color` styles; this was not introduced by the persistence code.
+
+**Manual route checks**
+
+- `POST /api/dailymotion/channel/metadata` for `https://www.dailymotion.com/user/Isulli282` reached Dailymotion but Dailymotion returned `404`; the route still persisted source metadata with `persistence:"database"`.
+- A Quick Preview job for `https://www.dailymotion.com/channel/news` persisted a DB job, one window, one page attempt, three canonical videos, manifest items, history, and coverage.
+- A Standard Fetch for `https://www.dailymotion.com/channel/news` was stopped, then the dev server was restarted, then the job status/history were read back from the database, and resume continued the job from the persisted checkpoint.
+- Coverage/history remained available after the restart, proving they were not only runtime memory.
+
+**Known limitations from this entry**
+
+- The requested `Isulli282` source returned a provider `404`, so successful video-item persistence was verified with Dailymotion's public `channel/news` endpoint instead.
+- `FetchJobEvent` rows are intentionally lightweight progress/terminal events; they are not a full per-field audit log.
+- Full coverage is still never claimed when windows are stopped, failed, capped, provider-limited, or max-limit interrupted.
+- Runtime memory remains as a deliberate fallback path for disabled/unavailable DB persistence.
+- `npm run lint` needs a future ESLint/Biome command migration outside this task's dependency/runtime persistence scope.
+
+**Safety notes**
+
+- Secrets were not intentionally printed.
+- `.env` and `.env.local` were not committed or edited.
+- No `DIRECT_URL`, Supabase direct host workflow, private Dailymotion access, video downloading, scraping, rehosting, `prisma migrate reset`, `prisma db push`, table drops, or table deletes were introduced.
 
 ## 2026-05-07 Next.js Dependency Declaration and Lockfile Alignment
 
@@ -92,7 +214,7 @@ Scope: Project source-of-truth ledger, updated after the 2026-05-06 dependency a
 - Canonical durable tables now applied in Supabase/Postgres: `video_sources`, `videos`, `collections`, `saved_videos`, and `source_catalog_snapshots`.
 - Temporary/operational tables now applied: `manifests`, `manifest_items`, `fetch_jobs`, `fetch_windows`, `fetch_page_attempts`, and `fetch_job_events`.
 - RLS is enabled by the migration on all new public-schema tables without broad public policies.
-- Current runtime code audit found no Prisma Client usage or table reads/writes in `src`; persistence is schema-applied but not wired into Channel Explorer repositories yet.
+- At the time of this 2026-05-06 audit, no Prisma Client usage or table reads/writes were found in `src`; the 2026-05-07 entry supersedes this with DB-backed repository wiring.
 - No old runtime tables, fallback reads, dual writes, or mixed database truth paths were found in current source code.
 - `DATABASE_URL` remains the only active database variable. `DIRECT_URL` was not restored.
 
@@ -125,7 +247,7 @@ Scope: Project source-of-truth ledger, updated after the 2026-05-06 dependency a
 - Secrets were not intentionally printed; DB scripts continued to redact raw URLs.
 - No `prisma migrate reset`, `prisma db push`, table drops, table deletes, or destructive DB repair commands were run.
 - No Dailymotion provider behavior, manifest filtering, AI routes, auth boundaries, or browser exposure of server secrets was changed.
-- The live database now has schema foundation tables, but product flows still use runtime/in-memory persistence until repositories are deliberately wired.
+- At the time of this 2026-05-06 entry, the live database had schema foundation tables but product flows still used runtime/in-memory persistence. The 2026-05-07 entry supersedes this with DB-backed Channel Explorer runtime wiring.
 
 ## 2026-05-06 Channel Explorer Deep Fetch, Metadata, History, Coverage, and Persistence Foundation
 
@@ -596,7 +718,7 @@ The app is built around the idea of **AI Public Video Discovery**: use real publ
 | `CRON_SECRET` | Server-only optional | No | Future secret for scheduled or protected cron entrypoints. | Self-generated. | No visible effect in scanned runtime routes. |
 | `WEBHOOK_SECRET` | Server-only optional | No | Future secret for protected webhook handlers. | Self-generated. | No visible effect in scanned runtime routes. |
 | `ENABLE_PGVECTOR` | Feature flag | No | Future toggle for pgvector and semantic features. | Local or deployment env. | Defaults to `false`. |
-| `ENABLE_MANIFEST_PERSISTENCE` | Feature flag | No | Future or partial toggle for persisted manifests. | Local or deployment env. | Defaults to `true`, but current explorer still uses in-memory manifests. |
+| `ENABLE_MANIFEST_PERSISTENCE` | Feature flag | No | Toggles Channel Explorer DB-backed manifests, jobs, history, resume, and coverage. | Local or deployment env. | Defaults to `true`; falls back to runtime memory with a UI warning if disabled or DB persistence is unavailable. |
 | `MAX_CHANNEL_FETCH_PAGES` | Safety limit | No | Upper bound for fetch-all pagination pages. | Local or deployment env. | Defaults to `200`. |
 | `MAX_CHANNEL_FETCH_ITEMS` | Safety limit | No | Upper bound for total fetched items in fetch-all mode. | Local or deployment env. | Defaults to `10000`. |
 | `CHANNEL_FETCH_DELAY_MS` | Safety limit | No | Delay between fetch-all page requests. | Local or deployment env. | Defaults to `250`. |
@@ -683,7 +805,7 @@ npm run db:studio
 
 - The Prisma migration history exists under `prisma/migrations`.
 - `20260506_channel_deep_fetch_history_persistence_foundation` has been applied to the configured Supabase/Postgres target.
-- The schema is applied and ready for future repository wiring, but current product runtime paths still use runtime/in-memory persistence.
+- Channel Explorer runtime paths now use the schema through the centralized persistence repository when `ENABLE_MANIFEST_PERSISTENCE=true`, with runtime memory only as the disabled/unavailable fallback.
 
 ## Migration Workflow
 
@@ -790,13 +912,13 @@ CONFIRM_DB_APPLY=true npm run db:apply
 | `/api/dailymotion/channel/analyze` | `POST` | Parse channel/profile/user input into a source descriptor. | `dailymotion-url-analyzer.ts` | Returns `400` with a controlled error on invalid input. |
 | `/api/dailymotion/channel/fetch` | `POST` | Fetch the first page of a channel feed and wrap it in a manifest. | `dailymotion-channel-service.ts` | Returns controlled `rate_limited`, `unknown`, or provider errors. |
 | `/api/dailymotion/channel/fetch-all` | `POST` | Paginate through public channel results with dedupe, delay, and safety caps. | Dailymotion client, manifest builder, fetch safety config | Preserves partial manifests on failure and exposes retry context. |
-| `/api/dailymotion/channel/metadata` | `POST` | Fetch public channel/profile metadata such as reported video totals when available. | `channel-metadata-service.ts` | Labels provider totals as reported, not guaranteed complete. |
-| `/api/dailymotion/channel/jobs/start` | `POST` | Start a runtime-memory channel fetch job. | `channel-deep-fetch-service.ts` | Uses server-clamped fetch settings and chunked processing. |
-| `/api/dailymotion/channel/jobs/next` | `POST` | Process the next runtime job chunk. | `channel-deep-fetch-service.ts` | Preserves partial progress and bounded work per request. |
-| `/api/dailymotion/channel/jobs/stop` | `POST` | Stop a runtime fetch job. | `channel-deep-fetch-service.ts` | Marks runtime job state without deleting collected metadata. |
-| `/api/dailymotion/channel/jobs/[id]/status` | `GET` | Read runtime fetch job status. | `channel-deep-fetch-service.ts` | Returns only current runtime job metadata. |
-| `/api/dailymotion/channel/history` | `GET` | List runtime fetch history for the current server process. | `channel-deep-fetch-service.ts` | Does not claim durable database history yet. |
-| `/api/dailymotion/channel/coverage` | `GET` | Summarize source coverage from runtime job/manifest state. | `channel-deep-fetch-service.ts` | Distinguishes complete, partial, capped, failed, stopped, and provider-limited states. |
+| `/api/dailymotion/channel/metadata` | `POST` | Fetch and persist public channel/profile metadata such as reported video totals when available. | `channel-metadata-service.ts`, `channel-fetch-persistence.ts` | Labels provider totals as reported, not guaranteed complete. |
+| `/api/dailymotion/channel/jobs/start` | `POST` | Start or resume a DB-backed channel fetch job when persistence is enabled. | `channel-deep-fetch-service.ts`, `channel-fetch-persistence.ts` | Creates/persists source, manifest, job, and planned windows with runtime fallback. |
+| `/api/dailymotion/channel/jobs/next` | `POST` | Process and persist the next job chunk. | `channel-deep-fetch-service.ts`, `channel-fetch-persistence.ts` | Persists page attempts, videos, manifest items, counters, and checkpoints. |
+| `/api/dailymotion/channel/jobs/stop` | `POST` | Stop a fetch job and persist its resumable checkpoint. | `channel-deep-fetch-service.ts`, `channel-fetch-persistence.ts` | Marks operational job state without deleting canonical metadata. |
+| `/api/dailymotion/channel/jobs/[id]/status` | `GET` | Read DB-backed fetch job status, hydrating after runtime restart. | `channel-deep-fetch-service.ts`, `channel-fetch-persistence.ts` | Returns persisted job graph when runtime memory is gone. |
+| `/api/dailymotion/channel/history` | `GET` | List durable DB fetch history for a source. | `channel-deep-fetch-service.ts`, `channel-fetch-persistence.ts` | Falls back to runtime memory only if persistence is disabled/unavailable. |
+| `/api/dailymotion/channel/coverage` | `GET` | Summarize source coverage from persisted job/window/page/video state. | `channel-deep-fetch-service.ts`, `channel-fetch-persistence.ts` | Distinguishes complete, partial, capped, failed, stopped, provider-limited, and max-limit states. |
 | `/api/dailymotion/channel/stop-fetch` | `POST` | Explain stop behavior. | None | Safe informational route only; no server-side job cancellation. |
 | `/api/dailymotion/search` | `POST` | Search global Dailymotion video metadata and build a temporary manifest. | Dailymotion client, temporary manifest builder | Rejects empty queries and returns controlled provider errors. |
 | `/api/manifests/channel/filter` | `POST` | Apply advanced filters to supplied manifest items. | `apply-advanced-video-filters.ts` | Pure transform over caller-provided items. |
@@ -1150,12 +1272,12 @@ CONFIRM_DB_APPLY=true npm run db:apply
 
 - The current real product surface is mostly `/channel-explorer`.
 - `/search`, `/ai-search`, and `/saved` are still mostly placeholder UIs.
-- The Prisma/Supabase persistence foundation is applied in the configured database, but the current explorer flow still returns runtime/in-memory manifests rather than persisting them through repositories.
+- Channel Explorer now uses Prisma/Supabase persistence for manifests, jobs, windows, page attempts, history, resume checkpoints, coverage, source metadata, snapshots, and videos when `ENABLE_MANIFEST_PERSISTENCE=true`.
 - `npm run lint` is blocked by the stale `next lint` script; Next.js 16 requires moving linting to a direct ESLint or Biome command.
 - `stop-fetch` is informational only; actual stop behavior is browser-side `AbortController`, not server-side job cancellation.
 - AI routes currently return plain text, not strongly structured end-to-end JSON workflows.
 - No visible sign-in, sign-up, or full account management UI exists in the scanned app pages.
-- No visible runtime Prisma client usage was found in `src`, so persistence is not yet wired into the main product loop.
+- Runtime Prisma usage is intentionally centralized in `src/lib/prisma/client.ts` and `src/lib/repositories/channel-fetch-persistence.ts`, and only server route handlers reach that layer.
 - `framer-motion` is installed but not visibly used in the scanned source files.
 - Future database applies still require the operator to verify the target database and set `CONFIRM_DB_APPLY=true`.
 
@@ -1163,7 +1285,7 @@ CONFIRM_DB_APPLY=true npm run db:apply
 
 - Add a YouTube adapter with the same normalized metadata and manifest model.
 - Expand into multi-platform adapters beyond Dailymotion.
-- Persist manifests, fetch jobs, and saved library data in Supabase/Postgres.
+- Expand DB-backed Channel Explorer persistence into saved-library workflows, cleanup tooling, and event/audit timelines.
 - Enable `pgvector` and semantic search once embeddings are introduced.
 - Add authentication and user-account flows on top of the existing Supabase SSR foundation.
 - Expand saved collections and library workflows beyond the current placeholder page.

@@ -60,7 +60,7 @@ npm run db:status
 
 ## Prisma And Migrations
 
-Prisma 7 reads connection settings from `prisma.config.ts`; `prisma/schema.prisma` keeps only `provider = "postgresql"`.
+Prisma 7 reads connection settings from `prisma.config.ts`; `prisma/schema.prisma` keeps only `provider = "postgresql"`. Runtime route handlers use Prisma Client through `@prisma/adapter-pg` and `pg`, with a small server-side pool created from `DATABASE_URL`.
 
 Connection resolution:
 
@@ -112,7 +112,7 @@ Required Vercel database variable:
 
 - `DATABASE_URL`: Supabase Session Pooler URI.
 
-`npm run build` runs `npm run env:validate` first through `scripts/app-validate-env.mjs`. Vercel should provide real env values; placeholder build stubs in code are only a build-time guard and are not used for runtime DB access.
+`npm run build` runs the application env preflight through `scripts/app-validate-env.mjs`, then runs `prisma generate`, then `next build`. Vercel should provide real env values; placeholder build stubs in code are only a build-time guard and are not used for runtime DB access.
 
 ## GitHub Actions
 
@@ -173,9 +173,10 @@ Channel metadata requests use public profile metadata when available, including 
 
 Current persistence status:
 
-- Runtime fetch history/resume is real for the current server runtime session.
-- Durable database persistence is schema-applied, but runtime repositories are not wired into the Channel Explorer flow yet.
-- Temporary manifests and fetch jobs have TTL fields in the schema; canonical videos, video sources, saved videos, and collections are durable and must not be cleaned up by temporary-history retention.
+- When `ENABLE_MANIFEST_PERSISTENCE=true`, Channel Explorer writes source metadata, catalog snapshots, fetch jobs, windows, page attempts, temporary manifests, manifest items, and videos through Prisma/Supabase.
+- Fetch history, coverage, and resumable checkpoints are read from the database and survive browser refreshes, server restarts, and deployment runtime replacement.
+- When DB persistence is disabled or unavailable, the routes fall back to runtime memory and the UI shows "Persistence unavailable: history may reset after restart/deploy."
+- Temporary manifests and fetch jobs have TTL fields; canonical videos, video sources, saved videos, and collections are durable and must not be cleaned up by temporary-history retention.
 
 New server hard caps:
 

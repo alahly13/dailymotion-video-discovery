@@ -1,0 +1,1021 @@
+import {
+  CoverageConfidence,
+  CoverageStatus,
+  FetchJobStatus,
+  FetchPageAttemptStatus,
+  FetchProfile,
+  FetchWindowStatus,
+  FetchWindowUnit,
+  ManifestPersistenceType,
+  ManifestStatus,
+  ManifestType,
+  Prisma,
+} from "@prisma/client";
+import { getFetchSafetyConfig } from "@/lib/config/env";
+import { getPrismaClient } from "@/lib/prisma/client";
+import { analyzeDailymotionChannelInput } from "@/lib/platforms/dailymotion/dailymotion-url-analyzer";
+import type {
+  ChannelCoverage,
+  ChannelFetchJobSnapshot,
+  ChannelFetchSettings,
+  ChannelPersistenceMode,
+  ChannelSourceMetadata,
+  FetchHistoryEntry,
+  FetchPageAttemptSummary,
+  FetchWindowSummary,
+} from "@/types/channel-fetch";
+import type { ChannelManifest, ChannelSourceType, ManifestFetchStatus } from "@/types/manifest";
+import type { NormalizedVideoMetadata } from "@/types/video";
+
+const PLATFORM = "dailymotion";
+const JOB_TYPE = "channel_deep_fetch";
+const PERSISTENCE_WARNING =
+  "Persistence unavailable: history may reset after restart/deploy.";
+
+type PersistedJobWithGraph = Prisma.FetchJobGetPayload<{
+  include: {
+    source: true;
+    manifest: { include: { items: { include: { video: true } } } };
+    windows: true;
+    pageAttempts: true;
+  };
+}>;
+type PersistedManifestItemWithVideo = NonNullable<PersistedJobWithGraph["manifest"]>["items"][number];
+
+function addHours(date: Date, hours: number) {
+  const next = new Date(date);
+  next.setUTCHours(next.getUTCHours() + hours);
+  return next;
+}
+
+function toJson(value: unknown): Prisma.InputJsonValue {
+  if (value === null || value === undefined) return Prisma.JsonNull as unknown as Prisma.InputJsonValue;
+  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+}
+
+function fromJsonObject<T>(value: Prisma.JsonValue | null | undefined, fallback: T): T {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return fallback;
+  return value as T;
+}
+
+function iso(date: Date | string | null | undefined) {
+  if (!date) return null;
+  return typeof date === "string" ? date : date.toISOString();
+}
+
+function dateOrNull(value: string | null | undefined) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date : null;
+}
+
+function numberFromBigInt(value: bigint | number | null | undefined) {
+  return typeof value === "bigint" ? Number(value) : value ?? 0;
+}
+
+function sourceKey(sourceType: string, externalSourceId: string) {
+  return `${sourceType}:${externalSourceId}`.toLowerCase();
+}
+
+function sourceIdentityFromInput(input: string) {
+  const analysis = analyzeDailymotionChannelInput(input);
+  return {
+    sourceType: analysis.sourceType,
+    externalSourceId: analysis.resolvedIdentifier.toLowerCase(),
+    sourceInput: analysis.sourceInput,
+    sourceUrl: analysis.sourceInput.startsWith("http") ? analysis.sourceInput : null,
+  };
+}
+
+function sourceIdentityFromMetadata(metadata: ChannelSourceMetadata) {
+  const identity = sourceIdentityFromInput(metadata.sourceInput);
+  return {
+    ...identity,
+    sourceType: metadata.sourceType as ChannelSourceType,
+  };
+}
+
+function prismaFetchProfile(profile: ChannelFetchSettings["fetchProfile"]) {
+  return profile.toUpperCase().replaceAll("-", "_") as FetchProfile;
+}
+
+function prismaFetchJobStatus(status: string) {
+  return status.toUpperCase() as FetchJobStatus;
+}
+
+function prismaManifestStatus(status: ManifestFetchStatus | string) {
+  const mapped = status === "fetching" ? "FETCHING" : status === "max_items_reached" ? "PARTIAL" : status.toUpperCase();
+  return (ManifestStatus[mapped as keyof typeof ManifestStatus] ?? ManifestStatus.PARTIAL) as ManifestStatus;
+}
+
+function prismaCoverageStatus(status: string) {
+  return status.toUpperCase() as CoverageStatus;
+}
+
+function prismaCoverageConfidence(confidence: string) {
+  return confidence.toUpperCase() as CoverageConfidence;
+}
+
+function prismaWindowStatus(status: string) {
+  return status.toUpperCase() as FetchWindowStatus;
+}
+
+function prismaWindowUnit(unit: string) {
+  return unit.toUpperCase() as FetchWindowUnit;
+}
+
+function prismaAttemptStatus(status: FetchPageAttemptSummary["status"]) {
+  return status.toUpperCase() as FetchPageAttemptStatus;
+}
+
+function channelStatus(status: FetchJobStatus | string) {
+  return String(status).toLowerCase() as FetchHistoryEntry["status"];
+}
+
+function manifestFetchStatus(status: FetchJobStatus | ManifestStatus | string): ManifestFetchStatus {
+  const normalized = String(status).toLowerCase();
+  if (normalized === "complete") return "complete";
+  if (normalized === "capped") return "capped";
+  if (normalized === "stopped") return "stopped";
+  if (normalized === "failed") return "failed";
+  if (normalized === "max_items_reached") return "max_items_reached";
+  if (normalized === "provider_limited") return "provider_limited";
+  if (normalized === "auth_or_provider_limited") return "auth_or_provider_limited";
+  if (normalized === "timeout_limited") return "timeout_limited";
+  if (normalized === "partial") return "partial";
+  return "fetching";
+}
+
+function isTerminalButResumable(status: FetchJobStatus | string, resumable: boolean) {
+  const normalized = channelStatus(status);
+  return resumable && ["partial", "capped", "stopped", "failed", "max_items_reached", "timeout_limited", "provider_limited", "auth_or_provider_limited"].includes(normalized);
+}
+
+function persistenceEnabled() {
+  return getFetchSafetyConfig().manifestPersistenceEnabled;
+}
+
+export function channelDatabasePersistenceMode(): ChannelPersistenceMode {
+  return persistenceEnabled() ? "database" : "runtime-memory";
+}
+
+export function channelPersistenceUnavailableWarning(error?: unknown) {
+  if (!error) return PERSISTENCE_WARNING;
+  const detail = error instanceof Error ? error.message : String(error);
+  return `${PERSISTENCE_WARNING} ${detail}`;
+}
+
+function metadataForSource(source: PersistedJobWithGraph["source"]): ChannelSourceMetadata | null {
+  if (!source) return null;
+  return {
+    platform: "dailymotion",
+    sourceType: source.sourceType,
+    sourceInput: source.canonicalUrl ?? source.handle ?? source.username ?? source.externalSourceId,
+    externalSourceId: source.externalSourceId,
+    handle: source.handle,
+    username: source.username,
+    displayName: source.displayName,
+    canonicalUrl: source.canonicalUrl,
+    thumbnailUrl: source.thumbnailUrl,
+    avatarUrl: source.avatarUrl,
+    description: source.description,
+    country: source.country,
+    language: source.language,
+    reportedTotalFromApi: source.reportedTotalFromApi,
+    reportedTotalFieldName: source.reportedTotalFieldName,
+    reportedTotalCheckedAt: iso(source.reportedTotalCheckedAt),
+    metadataJson: source.metadataJson,
+    metadataUnavailableReason: null,
+    persistedSourceId: source.id,
+    persistence: "database",
+    persistenceWarning: null,
+  };
+}
+
+function videoFromRecord(video: PersistedManifestItemWithVideo["video"]): NormalizedVideoMetadata {
+  return {
+    id: video.platformVideoId,
+    platform: "dailymotion",
+    url: video.url,
+    embedUrl: video.embedUrl,
+    title: video.title,
+    description: video.description,
+    thumbnail: video.thumbnailUrl,
+    duration: video.durationSeconds,
+    views: video.viewsCount === null ? null : Number(video.viewsCount),
+    rating: video.rating === null ? null : Number(video.rating),
+    language: video.language,
+    createdAt: iso(video.publishedAt),
+    year: video.year,
+    channelId: video.channelId,
+    channelName: video.channelName,
+    ownerId: video.ownerId,
+    ownerName: video.ownerName,
+    tags: video.tags,
+    hasThumbnail: video.hasThumbnail,
+    hasDescription: video.hasDescription,
+    raw: video.rawJson,
+  };
+}
+
+function buildCoverageFromJob(job: PersistedJobWithGraph): ChannelCoverage {
+  const source = job.source;
+  const reportedTotal = source?.reportedTotalFromApi ?? job.sourceReportedTotalAtEnd ?? job.sourceReportedTotalAtStart ?? null;
+  const collected = Number(job.uniqueItemsCollected);
+  const estimatedRemaining = reportedTotal !== null ? Math.max(reportedTotal - collected, 0) : null;
+  const coveragePercent = reportedTotal && reportedTotal > 0 ? Math.min(100, Number(((collected / reportedTotal) * 100).toFixed(2))) : null;
+  const pendingWindowCount = job.windows.filter((window) => window.status === FetchWindowStatus.PENDING || window.status === FetchWindowStatus.RUNNING).length;
+  const completedWindowCount = job.windows.filter((window) => window.status === FetchWindowStatus.COMPLETE).length;
+  const coverageStatus = channelStatus(job.coverageStatusAtEnd ?? job.status) as ChannelCoverage["coverageStatus"];
+  const latestCheckpoint = lastSuccessfulCheckpointFromJob(job) ?? job.lastCompletedWindowId;
+
+  return {
+    reportedTotalFromApi: reportedTotal,
+    reportedTotalCheckedAt: iso(source?.reportedTotalCheckedAt),
+    collectedUniqueVideos: collected,
+    estimatedRemainingVideos: estimatedRemaining,
+    coveragePercent,
+    coverageStatus,
+    coverageConfidence: coverageStatus === "complete" ? (reportedTotal === null || collected >= reportedTotal ? "high" : "medium") : coverageStatus === "unknown" ? "unknown" : "low",
+    cappedWindowCount: job.cappedWindowCount,
+    failedWindowCount: job.failedWindowCount,
+    completedWindowCount,
+    pendingWindowCount,
+    latestSuccessfulCheckpoint: latestCheckpoint,
+    lastResumePoint: resumeWindowIdFromJob(job),
+    warning: coverageStatus === "complete" ? null : "Full channel coverage is only confirmed when every planned time window completes without caps or failures.",
+    persistence: "database",
+    persistenceWarning: null,
+    persistenceType: "temporary",
+  };
+}
+
+function windowSummary(window: PersistedJobWithGraph["windows"][number]): FetchWindowSummary {
+  return {
+    id: window.id,
+    parentWindowId: window.parentWindowId,
+    status: channelStatus(window.status) as FetchWindowSummary["status"],
+    windowStart: iso(window.windowStart),
+    windowEnd: iso(window.windowEnd),
+    unit: channelStatus(window.unit) as FetchWindowSummary["unit"],
+    depth: window.depth,
+    nextPageToFetch: window.nextPageToFetch,
+    pagesFetched: window.pagesFetched,
+    itemsFound: Number(window.itemsFound),
+    uniqueItemsAdded: Number(window.uniqueItemsAdded),
+    duplicateItemsFound: Number(window.duplicateItemsFound),
+    reachedProviderCap: window.reachedProviderCap,
+    hasMoreAtEnd: window.hasMoreAtEnd,
+    errorMessage: typeof window.errorJson === "object" && window.errorJson && "message" in window.errorJson ? String(window.errorJson.message) : null,
+    startedAt: iso(window.startedAt),
+    completedAt: iso(window.completedAt),
+  };
+}
+
+function attemptSummary(attempt: PersistedJobWithGraph["pageAttempts"][number]): FetchPageAttemptSummary {
+  return {
+    id: attempt.id,
+    fetchWindowId: attempt.fetchWindowId,
+    pageNumber: attempt.pageNumber,
+    limit: attempt.limit,
+    status: channelStatus(attempt.status) as FetchPageAttemptSummary["status"],
+    itemsReturned: attempt.itemsReturned,
+    uniqueItemsAdded: attempt.uniqueItemsAdded,
+    duplicateItemsFound: attempt.duplicateItemsFound,
+    hasMore: attempt.hasMore,
+    requestedAt: attempt.requestedAt.toISOString(),
+    completedAt: iso(attempt.completedAt),
+  };
+}
+
+function manifestFromJob(job: PersistedJobWithGraph, metadata: ChannelSourceMetadata | null): ChannelManifest {
+  const items = (job.manifest?.items ?? [])
+    .sort((a, b) => Number(a.position - b.position))
+    .map((item) => videoFromRecord(item.video));
+  const settings = fromJsonObject<ChannelFetchSettings>(job.settingsJson, {} as ChannelFetchSettings);
+  const analysis = sourceIdentityFromInput(job.sourceInput);
+  const status = manifestFetchStatus(job.status);
+
+  return {
+    id: `dm-channel-${job.id}`,
+    platform: "dailymotion",
+    sourceType: analysis.sourceType,
+    sourceInput: job.sourceInput,
+    resolvedChannelId: job.source?.externalSourceId ?? null,
+    resolvedChannelName: job.source?.displayName ?? job.source?.username ?? null,
+    items,
+    fetchStatus: status,
+    pagesFetched: job.pagesFetched,
+    totalKnownItems: job.source?.reportedTotalFromApi ?? null,
+    totalWindowsProcessed: job.windowsProcessed,
+    cappedWindowCount: job.cappedWindowCount,
+    failedWindowCount: job.failedWindowCount,
+    duplicateCount: Number(job.duplicateCount),
+    completenessStatus: channelStatus(job.coverageStatusAtEnd) as ChannelManifest["completenessStatus"],
+    fetchSettings: Object.keys(settings).length > 0 ? settings : null,
+    sourceMetadata: metadata,
+    fetchJobId: job.id,
+    isComplete: status === "complete",
+    isPartial: status !== "complete",
+    createdAt: job.createdAt.toISOString(),
+    updatedAt: job.updatedAt.toISOString(),
+    requestId: job.id,
+  };
+}
+
+function historyEntryFromJob(job: PersistedJobWithGraph): FetchHistoryEntry {
+  const checkpoint = lastSuccessfulCheckpointFromJob(job) ?? resumeWindowIdFromJob(job) ?? job.lastCompletedWindowId;
+  const identity = job.source ? sourceKey(job.source.sourceType, job.source.externalSourceId) : sourceKeyFromJobInput(job.sourceInput);
+
+  return {
+    id: job.id,
+    sourceKey: identity,
+    fetchProfile: channelStatus(job.fetchProfile).replaceAll("_", "-") as FetchHistoryEntry["fetchProfile"],
+    status: channelStatus(job.status),
+    completenessStatus: channelStatus(job.coverageStatusAtEnd) as FetchHistoryEntry["completenessStatus"],
+    startedAt: iso(job.startedAt),
+    completedAt: iso(job.completedAt),
+    stoppedAt: iso(job.stoppedAt),
+    updatedAt: job.updatedAt.toISOString(),
+    uniqueItemsCollected: Number(job.uniqueItemsCollected),
+    pagesFetched: job.pagesFetched,
+    windowsProcessed: job.windowsProcessed,
+    cappedWindowCount: job.cappedWindowCount,
+    failedWindowCount: job.failedWindowCount,
+    resumable: isTerminalButResumable(job.status, job.resumable),
+    currentResumeCheckpoint: checkpoint,
+    persistence: "database",
+    persistenceType: "temporary",
+    persistenceWarning: null,
+  };
+}
+
+function lastSuccessfulCheckpointFromJob(job: PersistedJobWithGraph) {
+  if (typeof job.resumeCursorJson !== "object" || !job.resumeCursorJson || !("lastSuccessfulCheckpoint" in job.resumeCursorJson)) {
+    return null;
+  }
+
+  const checkpoint = String(job.resumeCursorJson.lastSuccessfulCheckpoint ?? "");
+  return checkpoint.length > 0 ? checkpoint : null;
+}
+
+function resumeWindowIdFromJob(job: PersistedJobWithGraph) {
+  if (job.currentWindowId) return job.currentWindowId;
+
+  const resumableWindowStatuses = new Set<FetchWindowStatus>([FetchWindowStatus.RUNNING, FetchWindowStatus.PENDING, FetchWindowStatus.FAILED, FetchWindowStatus.STOPPED]);
+  const resumableWindow = job.windows.find((window) => resumableWindowStatuses.has(window.status));
+  return resumableWindow?.id ?? null;
+}
+
+function sourceKeyFromJobInput(input: string) {
+  const identity = sourceIdentityFromInput(input);
+  return sourceKey(identity.sourceType, identity.externalSourceId);
+}
+
+export async function upsertChannelSourceMetadata(metadata: ChannelSourceMetadata) {
+  if (!persistenceEnabled()) return { source: null, persistence: "runtime-memory" as const };
+  const prisma = getPrismaClient();
+  const identity = sourceIdentityFromMetadata(metadata);
+  const now = metadata.reportedTotalCheckedAt ? new Date(metadata.reportedTotalCheckedAt) : new Date();
+
+  // VideoSource is the durable identity anchor for Channel Explorer. We use the
+  // analyzed public identifier as the unique key so history lookups by the same
+  // pasted URL/username survive provider metadata shape changes.
+  const source = await prisma.videoSource.upsert({
+    where: {
+      platform_externalSourceId_sourceType: {
+        platform: PLATFORM,
+        externalSourceId: identity.externalSourceId,
+        sourceType: identity.sourceType,
+      },
+    },
+    create: {
+      platform: PLATFORM,
+      externalSourceId: identity.externalSourceId,
+      sourceType: identity.sourceType,
+      handle: metadata.handle,
+      username: metadata.username,
+      displayName: metadata.displayName,
+      canonicalUrl: metadata.canonicalUrl,
+      thumbnailUrl: metadata.thumbnailUrl,
+      avatarUrl: metadata.avatarUrl,
+      description: metadata.description,
+      country: metadata.country,
+      language: metadata.language,
+      reportedTotalFromApi: metadata.reportedTotalFromApi,
+      reportedTotalFieldName: metadata.reportedTotalFieldName,
+      reportedTotalCheckedAt: now,
+      metadataJson: toJson({ provider: metadata.metadataJson, providerExternalSourceId: metadata.externalSourceId }),
+      lastMetadataRefreshAt: now,
+    },
+    update: {
+      handle: metadata.handle,
+      username: metadata.username,
+      displayName: metadata.displayName,
+      canonicalUrl: metadata.canonicalUrl,
+      thumbnailUrl: metadata.thumbnailUrl,
+      avatarUrl: metadata.avatarUrl,
+      description: metadata.description,
+      country: metadata.country,
+      language: metadata.language,
+      reportedTotalFromApi: metadata.reportedTotalFromApi,
+      reportedTotalFieldName: metadata.reportedTotalFieldName,
+      reportedTotalCheckedAt: now,
+      metadataJson: toJson({ provider: metadata.metadataJson, providerExternalSourceId: metadata.externalSourceId }),
+      lastMetadataRefreshAt: now,
+    },
+  });
+
+  await createSourceCatalogSnapshot(source.id, {
+    reportedTotalFromApi: metadata.reportedTotalFromApi,
+    reportedTotalFieldName: metadata.reportedTotalFieldName,
+    reportedTotalRawJson: metadata.metadataJson,
+    collectedUniqueVideos: 0,
+    estimatedRemainingVideos: metadata.reportedTotalFromApi,
+    coveragePercent: null,
+    coverageStatus: "unknown",
+    coverageConfidence: "unknown",
+    cappedWindowCount: 0,
+    failedWindowCount: 0,
+    completedWindowCount: 0,
+    pendingWindowCount: 0,
+  });
+
+  return { source, persistence: "database" as const };
+}
+
+async function createSourceCatalogSnapshot(sourceId: string, coverage: Omit<ChannelCoverage, "reportedTotalCheckedAt" | "latestSuccessfulCheckpoint" | "lastResumePoint" | "warning" | "persistence" | "persistenceWarning" | "persistenceType"> & { reportedTotalFieldName?: string | null; reportedTotalRawJson?: unknown }) {
+  const prisma = getPrismaClient();
+  await prisma.sourceCatalogSnapshot.create({
+    data: {
+      sourceId,
+      platform: PLATFORM,
+      reportedTotalFromApi: coverage.reportedTotalFromApi,
+      reportedTotalFieldName: coverage.reportedTotalFieldName ?? null,
+      reportedTotalRawJson: toJson(coverage.reportedTotalRawJson ?? null),
+      collectedUniqueVideos: BigInt(coverage.collectedUniqueVideos),
+      estimatedRemainingVideos: coverage.estimatedRemainingVideos === null ? null : BigInt(coverage.estimatedRemainingVideos),
+      coveragePercent: coverage.coveragePercent,
+      coverageStatus: prismaCoverageStatus(coverage.coverageStatus),
+      coverageConfidence: prismaCoverageConfidence(coverage.coverageConfidence),
+      cappedWindowCount: coverage.cappedWindowCount,
+      failedWindowCount: coverage.failedWindowCount,
+      completedWindowCount: coverage.completedWindowCount,
+      pendingWindowCount: coverage.pendingWindowCount,
+    },
+  });
+}
+
+async function sourceForSnapshot(snapshot: ChannelFetchJobSnapshot) {
+  const metadata = snapshot.metadata;
+  if (metadata) {
+    const result = await upsertChannelSourceMetadata(metadata);
+    if (result.source) return result.source;
+  }
+
+  const identity = sourceIdentityFromInput(snapshot.manifest.sourceInput);
+  const prisma = getPrismaClient();
+  return prisma.videoSource.upsert({
+    where: {
+      platform_externalSourceId_sourceType: {
+        platform: PLATFORM,
+        externalSourceId: identity.externalSourceId,
+        sourceType: identity.sourceType,
+      },
+    },
+    create: {
+      platform: PLATFORM,
+      externalSourceId: identity.externalSourceId,
+      sourceType: identity.sourceType,
+      handle: identity.externalSourceId,
+      canonicalUrl: identity.sourceUrl,
+    },
+    update: {
+      handle: identity.externalSourceId,
+      canonicalUrl: identity.sourceUrl,
+    },
+  });
+}
+
+async function upsertVideo(video: NormalizedVideoMetadata, sourceId: string) {
+  const prisma = getPrismaClient();
+  return prisma.video.upsert({
+    where: {
+      platform_platformVideoId: {
+        platform: PLATFORM,
+        platformVideoId: video.id,
+      },
+    },
+    create: {
+      platform: PLATFORM,
+      platformVideoId: video.id,
+      sourceId,
+      url: video.url,
+      embedUrl: video.embedUrl,
+      title: video.title,
+      description: video.description,
+      thumbnailUrl: video.thumbnail,
+      durationSeconds: video.duration,
+      viewsCount: video.views === null ? null : BigInt(Math.trunc(video.views)),
+      rating: video.rating,
+      language: video.language,
+      ownerId: video.ownerId,
+      ownerName: video.ownerName,
+      channelId: video.channelId,
+      channelName: video.channelName,
+      tags: video.tags,
+      publishedAt: dateOrNull(video.createdAt),
+      year: video.year,
+      hasThumbnail: video.hasThumbnail,
+      hasDescription: video.hasDescription,
+      rawJson: toJson(video.raw ?? null),
+      lastSeenAt: new Date(),
+    },
+    update: {
+      sourceId,
+      url: video.url,
+      embedUrl: video.embedUrl,
+      title: video.title,
+      description: video.description,
+      thumbnailUrl: video.thumbnail,
+      durationSeconds: video.duration,
+      viewsCount: video.views === null ? null : BigInt(Math.trunc(video.views)),
+      rating: video.rating,
+      language: video.language,
+      ownerId: video.ownerId,
+      ownerName: video.ownerName,
+      channelId: video.channelId,
+      channelName: video.channelName,
+      tags: video.tags,
+      publishedAt: dateOrNull(video.createdAt),
+      year: video.year,
+      hasThumbnail: video.hasThumbnail,
+      hasDescription: video.hasDescription,
+      rawJson: toJson(video.raw ?? null),
+      lastSeenAt: new Date(),
+    },
+  });
+}
+
+export async function persistChannelFetchSnapshot(snapshot: ChannelFetchJobSnapshot) {
+  if (!persistenceEnabled()) return { persistence: "runtime-memory" as const };
+
+  const prisma = getPrismaClient();
+  const source = await sourceForSnapshot(snapshot);
+  const manifestId = snapshot.id;
+  const now = new Date();
+  const caps = getFetchSafetyConfig();
+  const expiresAt = addHours(now, Math.max(caps.jobTtlHours, caps.tempManifestTtlHours));
+  const coverage = snapshot.coverage;
+  const terminal = snapshot.status !== "running" && snapshot.status !== "pending";
+
+  // Manifest, FetchJob, windows, page attempts, and manifest items are the
+  // temporary operational truth for resume/history. They are upserted by stable
+  // UUIDs so browser retries do not create duplicate logical jobs or windows.
+  await prisma.manifest.upsert({
+    where: { id: manifestId },
+    create: {
+      id: manifestId,
+      manifestType: ManifestType.CHANNEL,
+      persistenceType: ManifestPersistenceType.TEMPORARY,
+      platform: PLATFORM,
+      sourceId: source.id,
+      sourceInput: snapshot.manifest.sourceInput,
+      sourceUrl: source.canonicalUrl,
+      status: prismaManifestStatus(snapshot.manifest.fetchStatus),
+      completenessStatus: prismaCoverageStatus(snapshot.completenessStatus),
+      itemCount: BigInt(snapshot.progress.itemsCollected),
+      uniqueItemCount: BigInt(snapshot.progress.uniqueItemsCollected),
+      duplicateCount: BigInt(snapshot.progress.duplicateCount),
+      totalPagesFetched: snapshot.progress.pagesFetched,
+      totalWindowsProcessed: snapshot.progress.windowsProcessed,
+      cappedWindowCount: snapshot.progress.cappedWindowCount,
+      failedWindowCount: snapshot.progress.failedWindowCount,
+      fetchSettingsJson: toJson(snapshot.settings),
+      requestId: snapshot.id,
+      expiresAt,
+      completedAt: terminal ? now : null,
+    },
+    update: {
+      sourceId: source.id,
+      sourceInput: snapshot.manifest.sourceInput,
+      sourceUrl: source.canonicalUrl,
+      status: prismaManifestStatus(snapshot.manifest.fetchStatus),
+      completenessStatus: prismaCoverageStatus(snapshot.completenessStatus),
+      itemCount: BigInt(snapshot.progress.itemsCollected),
+      uniqueItemCount: BigInt(snapshot.progress.uniqueItemsCollected),
+      duplicateCount: BigInt(snapshot.progress.duplicateCount),
+      totalPagesFetched: snapshot.progress.pagesFetched,
+      totalWindowsProcessed: snapshot.progress.windowsProcessed,
+      cappedWindowCount: snapshot.progress.cappedWindowCount,
+      failedWindowCount: snapshot.progress.failedWindowCount,
+      fetchSettingsJson: toJson(snapshot.settings),
+      completedAt: terminal ? now : null,
+    },
+  });
+
+  await prisma.fetchJob.upsert({
+    where: { id: snapshot.id },
+    create: {
+      id: snapshot.id,
+      sourceId: source.id,
+      manifestId,
+      jobType: JOB_TYPE,
+      platform: PLATFORM,
+      sourceInput: snapshot.manifest.sourceInput,
+      sourceUrl: source.canonicalUrl,
+      fetchProfile: prismaFetchProfile(snapshot.settings.fetchProfile),
+      status: prismaFetchJobStatus(snapshot.status),
+      settingsJson: toJson(snapshot.settings),
+      progressJson: toJson(snapshot.progress),
+      resumeCursorJson: toJson({
+        currentWindowId: snapshot.progress.currentWindow?.id ?? null,
+        currentPage: snapshot.progress.currentWindow?.nextPageToFetch ?? null,
+        lastSuccessfulCheckpoint: coverage.latestSuccessfulCheckpoint,
+      }),
+      currentWindowId: snapshot.progress.currentWindow?.id ?? null,
+      currentPage: snapshot.progress.currentWindow?.nextPageToFetch ?? null,
+      lastCompletedWindowId: coverage.latestSuccessfulCheckpoint?.split(":page:")[0] ?? null,
+      maxItems: BigInt(snapshot.settings.maxItems),
+      maxPages: snapshot.settings.maxTotalPages,
+      maxWindows: snapshot.settings.maxWindows,
+      pagesFetched: snapshot.progress.pagesFetched,
+      windowsProcessed: snapshot.progress.windowsProcessed,
+      itemsCollected: BigInt(snapshot.progress.itemsCollected),
+      uniqueItemsCollected: BigInt(snapshot.progress.uniqueItemsCollected),
+      duplicateCount: BigInt(snapshot.progress.duplicateCount),
+      cappedWindowCount: snapshot.progress.cappedWindowCount,
+      failedWindowCount: snapshot.progress.failedWindowCount,
+      sourceReportedTotalAtStart: snapshot.metadata?.reportedTotalFromApi ?? null,
+      sourceReportedTotalAtEnd: snapshot.metadata?.reportedTotalFromApi ?? null,
+      collectedUniqueAtEnd: BigInt(snapshot.progress.uniqueItemsCollected),
+      coverageStatusAtEnd: prismaCoverageStatus(snapshot.completenessStatus),
+      resumable: snapshot.progress.resumable,
+      stoppedAt: snapshot.status === "stopped" ? now : null,
+      startedAt: now,
+      completedAt: terminal ? now : null,
+      expiresAt,
+    },
+    update: {
+      sourceId: source.id,
+      manifestId,
+      sourceInput: snapshot.manifest.sourceInput,
+      sourceUrl: source.canonicalUrl,
+      fetchProfile: prismaFetchProfile(snapshot.settings.fetchProfile),
+      status: prismaFetchJobStatus(snapshot.status),
+      settingsJson: toJson(snapshot.settings),
+      progressJson: toJson(snapshot.progress),
+      resumeCursorJson: toJson({
+        currentWindowId: snapshot.progress.currentWindow?.id ?? null,
+        currentPage: snapshot.progress.currentWindow?.nextPageToFetch ?? null,
+        lastSuccessfulCheckpoint: coverage.latestSuccessfulCheckpoint,
+      }),
+      currentWindowId: snapshot.progress.currentWindow?.id ?? null,
+      currentPage: snapshot.progress.currentWindow?.nextPageToFetch ?? null,
+      lastCompletedWindowId: coverage.latestSuccessfulCheckpoint?.split(":page:")[0] ?? null,
+      maxItems: BigInt(snapshot.settings.maxItems),
+      maxPages: snapshot.settings.maxTotalPages,
+      maxWindows: snapshot.settings.maxWindows,
+      pagesFetched: snapshot.progress.pagesFetched,
+      windowsProcessed: snapshot.progress.windowsProcessed,
+      itemsCollected: BigInt(snapshot.progress.itemsCollected),
+      uniqueItemsCollected: BigInt(snapshot.progress.uniqueItemsCollected),
+      duplicateCount: BigInt(snapshot.progress.duplicateCount),
+      cappedWindowCount: snapshot.progress.cappedWindowCount,
+      failedWindowCount: snapshot.progress.failedWindowCount,
+      sourceReportedTotalAtEnd: snapshot.metadata?.reportedTotalFromApi ?? null,
+      collectedUniqueAtEnd: BigInt(snapshot.progress.uniqueItemsCollected),
+      coverageStatusAtEnd: prismaCoverageStatus(snapshot.completenessStatus),
+      resumable: snapshot.progress.resumable,
+      stoppedAt: snapshot.status === "stopped" ? now : null,
+      completedAt: terminal ? now : null,
+    },
+  });
+
+  await prisma.fetchJobEvent.create({
+    data: {
+      fetchJobId: snapshot.id,
+      eventType: terminal ? `job_${snapshot.status}` : "job_progress",
+      message: terminal ? `Channel fetch finished with status ${snapshot.status}.` : `Channel fetch progress persisted with status ${snapshot.status}.`,
+      dataJson: toJson({
+        status: snapshot.status,
+        fetchProfile: snapshot.settings.fetchProfile,
+        pagesFetched: snapshot.progress.pagesFetched,
+        windowsProcessed: snapshot.progress.windowsProcessed,
+        uniqueItemsCollected: snapshot.progress.uniqueItemsCollected,
+        currentWindowId: snapshot.progress.currentWindow?.id ?? null,
+        currentPage: snapshot.progress.currentWindow?.nextPageToFetch ?? null,
+        latestSuccessfulCheckpoint: coverage.latestSuccessfulCheckpoint,
+        persistenceType: "temporary",
+      }),
+    },
+  });
+
+  for (const window of snapshot.windows) {
+    await prisma.fetchWindow.upsert({
+      where: { id: window.id },
+      create: {
+        id: window.id,
+        fetchJobId: snapshot.id,
+        sourceId: source.id,
+        parentWindowId: window.parentWindowId,
+        status: prismaWindowStatus(window.status),
+        windowStart: dateOrNull(window.windowStart),
+        windowEnd: dateOrNull(window.windowEnd),
+        unit: prismaWindowUnit(window.unit),
+        depth: window.depth,
+        pageStart: 1,
+        nextPageToFetch: window.nextPageToFetch,
+        pagesFetched: window.pagesFetched,
+        itemsFound: BigInt(window.itemsFound),
+        uniqueItemsAdded: BigInt(window.uniqueItemsAdded),
+        duplicateItemsFound: BigInt(window.duplicateItemsFound),
+        reachedProviderCap: window.reachedProviderCap,
+        hasMoreAtEnd: window.hasMoreAtEnd,
+        errorJson: window.errorMessage ? toJson({ message: window.errorMessage }) : Prisma.JsonNull,
+        startedAt: dateOrNull(window.startedAt),
+        completedAt: dateOrNull(window.completedAt),
+      },
+      update: {
+        sourceId: source.id,
+        parentWindowId: window.parentWindowId,
+        status: prismaWindowStatus(window.status),
+        windowStart: dateOrNull(window.windowStart),
+        windowEnd: dateOrNull(window.windowEnd),
+        unit: prismaWindowUnit(window.unit),
+        depth: window.depth,
+        nextPageToFetch: window.nextPageToFetch,
+        pagesFetched: window.pagesFetched,
+        itemsFound: BigInt(window.itemsFound),
+        uniqueItemsAdded: BigInt(window.uniqueItemsAdded),
+        duplicateItemsFound: BigInt(window.duplicateItemsFound),
+        reachedProviderCap: window.reachedProviderCap,
+        hasMoreAtEnd: window.hasMoreAtEnd,
+        errorJson: window.errorMessage ? toJson({ message: window.errorMessage }) : Prisma.JsonNull,
+        startedAt: dateOrNull(window.startedAt),
+        completedAt: dateOrNull(window.completedAt),
+      },
+    });
+  }
+
+  for (const attempt of snapshot.recentPageAttempts) {
+    await prisma.fetchPageAttempt.upsert({
+      where: { id: attempt.id },
+      create: {
+        id: attempt.id,
+        fetchWindowId: attempt.fetchWindowId,
+        fetchJobId: snapshot.id,
+        pageNumber: attempt.pageNumber,
+        limit: attempt.limit,
+        requestParamsJson: toJson({ page: attempt.pageNumber, limit: attempt.limit }),
+        status: prismaAttemptStatus(attempt.status),
+        itemsReturned: attempt.itemsReturned,
+        uniqueItemsAdded: attempt.uniqueItemsAdded,
+        duplicateItemsFound: attempt.duplicateItemsFound,
+        hasMore: attempt.hasMore,
+        requestedAt: new Date(attempt.requestedAt),
+        completedAt: dateOrNull(attempt.completedAt),
+      },
+      update: {
+        status: prismaAttemptStatus(attempt.status),
+        itemsReturned: attempt.itemsReturned,
+        uniqueItemsAdded: attempt.uniqueItemsAdded,
+        duplicateItemsFound: attempt.duplicateItemsFound,
+        hasMore: attempt.hasMore,
+        completedAt: dateOrNull(attempt.completedAt),
+      },
+    });
+  }
+
+  for (let index = 0; index < snapshot.manifest.items.length; index += 1) {
+    const item = snapshot.manifest.items[index];
+    const video = await upsertVideo(item, source.id);
+    await prisma.manifestItem.upsert({
+      where: {
+        manifestId_videoId: {
+          manifestId,
+          videoId: video.id,
+        },
+      },
+      create: {
+        manifestId,
+        videoId: video.id,
+        position: BigInt(index + 1),
+        metadataSnapshotJson: toJson(item),
+      },
+      update: {
+        position: BigInt(index + 1),
+        metadataSnapshotJson: toJson(item),
+      },
+    });
+  }
+
+  if (terminal || snapshot.status === "running") {
+    await createSourceCatalogSnapshot(source.id, {
+      reportedTotalFromApi: coverage.reportedTotalFromApi,
+      reportedTotalFieldName: snapshot.metadata?.reportedTotalFieldName ?? null,
+      reportedTotalRawJson: snapshot.metadata?.metadataJson ?? null,
+      collectedUniqueVideos: coverage.collectedUniqueVideos,
+      estimatedRemainingVideos: coverage.estimatedRemainingVideos,
+      coveragePercent: coverage.coveragePercent,
+      coverageStatus: coverage.coverageStatus,
+      coverageConfidence: coverage.coverageConfidence,
+      cappedWindowCount: coverage.cappedWindowCount,
+      failedWindowCount: coverage.failedWindowCount,
+      completedWindowCount: coverage.completedWindowCount,
+      pendingWindowCount: coverage.pendingWindowCount,
+    });
+  }
+
+  return { persistence: "database" as const };
+}
+
+async function findJobWithGraph(jobId: string): Promise<PersistedJobWithGraph | null> {
+  const prisma = getPrismaClient();
+  return prisma.fetchJob.findUnique({
+    where: { id: jobId },
+    include: {
+      source: true,
+      manifest: { include: { items: { include: { video: true } } } },
+      windows: { orderBy: [{ createdAt: "asc" }] },
+      pageAttempts: { orderBy: [{ requestedAt: "asc" }] },
+    },
+  });
+}
+
+export async function getPersistedChannelFetchJob(jobId: string): Promise<ChannelFetchJobSnapshot | null> {
+  if (!persistenceEnabled()) return null;
+  const job = await findJobWithGraph(jobId);
+  if (!job) return null;
+  return persistedJobSnapshot(job);
+}
+
+function persistedJobSnapshot(job: PersistedJobWithGraph): ChannelFetchJobSnapshot {
+  const metadata = metadataForSource(job.source);
+  const windows = job.windows.map(windowSummary);
+  const coverage = buildCoverageFromJob(job);
+  const manifest = manifestFromJob(job, metadata);
+  const historyEntry = historyEntryFromJob(job);
+  const activeWindowId = resumeWindowIdFromJob(job);
+  const currentWindow = activeWindowId ? windows.find((window) => window.id === activeWindowId) ?? null : null;
+
+  return {
+    id: job.id,
+    sourceKey: job.source ? sourceKey(job.source.sourceType, job.source.externalSourceId) : sourceKeyFromJobInput(job.sourceInput),
+    status: channelStatus(job.status),
+    completenessStatus: channelStatus(job.coverageStatusAtEnd) as ChannelFetchJobSnapshot["completenessStatus"],
+    settings: fromJsonObject<ChannelFetchSettings>(job.settingsJson, {} as ChannelFetchSettings),
+    metadata,
+    progress: {
+      fetchProfile: channelStatus(job.fetchProfile).replaceAll("_", "-") as ChannelFetchSettings["fetchProfile"],
+      status: channelStatus(job.status),
+      completenessStatus: channelStatus(job.coverageStatusAtEnd) as ChannelFetchJobSnapshot["completenessStatus"],
+      pagesFetched: job.pagesFetched,
+      windowsProcessed: job.windowsProcessed,
+      windowsQueued: windows.filter((window) => window.status === "pending" || window.status === "running").length,
+      itemsCollected: Number(job.itemsCollected),
+      uniqueItemsCollected: Number(job.uniqueItemsCollected),
+      duplicateCount: Number(job.duplicateCount),
+      cappedWindowCount: job.cappedWindowCount,
+      failedWindowCount: job.failedWindowCount,
+      currentWindow,
+      maxItemsReached: job.status === FetchJobStatus.MAX_ITEMS_REACHED,
+      partialManifestPreserved: true,
+      resumable: job.resumable,
+    },
+    coverage,
+    manifest,
+    historyEntry,
+    windows,
+    recentPageAttempts: job.pageAttempts.slice(-10).map(attemptSummary),
+    persistence: "database",
+    persistenceType: "temporary",
+    persistenceWarning: null,
+  };
+}
+
+export async function listPersistedChannelFetchHistory(inputOrSourceKey?: string | null, limit = 25): Promise<FetchHistoryEntry[]> {
+  if (!persistenceEnabled()) return [];
+  const prisma = getPrismaClient();
+  let sourceFilter: Prisma.FetchJobWhereInput | undefined;
+
+  if (inputOrSourceKey) {
+    const raw = inputOrSourceKey.trim();
+    const parsedKey = raw.includes(":") ? raw.split(":") : null;
+    if (parsedKey && parsedKey.length >= 2) {
+      const [sourceType, ...rest] = parsedKey;
+      sourceFilter = {
+        source: {
+          platform: PLATFORM,
+          sourceType,
+          externalSourceId: rest.join(":"),
+        },
+      };
+    } else {
+      const identity = sourceIdentityFromInput(raw);
+      sourceFilter = {
+        OR: [
+          { sourceInput: raw },
+          {
+            source: {
+              platform: PLATFORM,
+              sourceType: identity.sourceType,
+              externalSourceId: identity.externalSourceId,
+            },
+          },
+        ],
+      };
+    }
+  }
+
+  const jobs = await prisma.fetchJob.findMany({
+    where: { jobType: JOB_TYPE, platform: PLATFORM, ...sourceFilter },
+    include: {
+      source: true,
+      manifest: { include: { items: { include: { video: true } } } },
+      windows: true,
+      pageAttempts: true,
+    },
+    orderBy: { updatedAt: "desc" },
+    take: limit,
+  });
+
+  return jobs.map(historyEntryFromJob);
+}
+
+export async function getLatestPersistedChannelCoverage(inputOrSourceKey: string): Promise<ChannelCoverage | null> {
+  if (!persistenceEnabled()) return null;
+  const history = await listPersistedChannelFetchHistory(inputOrSourceKey, 1);
+  if (history.length === 0) {
+    const identity = inputOrSourceKey.includes(":") ? null : sourceIdentityFromInput(inputOrSourceKey);
+    const prisma = getPrismaClient();
+    const source = identity
+      ? await prisma.videoSource.findUnique({
+          where: {
+            platform_externalSourceId_sourceType: {
+              platform: PLATFORM,
+              externalSourceId: identity.externalSourceId,
+              sourceType: identity.sourceType,
+            },
+          },
+        })
+      : null;
+    if (!source) return null;
+    return {
+      reportedTotalFromApi: source.reportedTotalFromApi,
+      reportedTotalCheckedAt: iso(source.reportedTotalCheckedAt),
+      collectedUniqueVideos: 0,
+      estimatedRemainingVideos: source.reportedTotalFromApi,
+      coveragePercent: null,
+      coverageStatus: "unknown",
+      coverageConfidence: "unknown",
+      cappedWindowCount: 0,
+      failedWindowCount: 0,
+      completedWindowCount: 0,
+      pendingWindowCount: 0,
+      latestSuccessfulCheckpoint: null,
+      lastResumePoint: null,
+      warning: "Full channel coverage is only confirmed when every planned time window completes without caps or failures.",
+      persistence: "database",
+      persistenceType: "temporary",
+      persistenceWarning: null,
+    };
+  }
+
+  const job = await findJobWithGraph(history[0].id);
+  return job ? buildCoverageFromJob(job) : null;
+}
+
+export async function getPersistedRuntimeJobData(jobId: string) {
+  if (!persistenceEnabled()) return null;
+  const job = await findJobWithGraph(jobId);
+  if (!job) return null;
+  const snapshot = persistedJobSnapshot(job);
+  return {
+    job,
+    snapshot,
+    metadata: metadataForSource(job.source),
+    items: snapshot.manifest.items,
+    windows: snapshot.windows,
+    pageAttempts: snapshot.recentPageAttempts,
+    settings: snapshot.settings,
+  };
+}
+
+export function decorateMetadataWithPersistence(metadata: ChannelSourceMetadata, persistedSourceId: string | null, warning: string | null): ChannelSourceMetadata {
+  return {
+    ...metadata,
+    persistedSourceId,
+    persistence: warning ? "runtime-memory" : "database",
+    persistenceWarning: warning,
+  };
+}
+
+export function decorateCoverageFallback(coverage: ChannelCoverage | null, warning: string): ChannelCoverage | null {
+  if (!coverage) return null;
+  return {
+    ...coverage,
+    persistence: "runtime-memory",
+    persistenceWarning: warning,
+  };
+}

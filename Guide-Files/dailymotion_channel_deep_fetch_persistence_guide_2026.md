@@ -46,6 +46,14 @@ The Channel Explorer should evolve from a simple one-shot fetch UI into a profes
 - Permanent saved library foundations
 - Strong Prisma/PostgreSQL migration design
 
+**Implementation status as of 2026-05-07:**
+
+- The `20260506_channel_deep_fetch_history_persistence_foundation` migration is applied in the configured Supabase/Postgres target used by this workspace.
+- Channel Explorer route handlers now use a centralized Prisma/`@prisma/adapter-pg` persistence layer when `ENABLE_MANIFEST_PERSISTENCE=true`.
+- Fetch history, resume checkpoints, windows, page attempts, manifests, manifest items, source metadata, catalog snapshots, and canonical videos are written to the database.
+- Runtime memory remains a fallback only when persistence is disabled or unavailable; the UI must show the persistence warning in that case.
+- The current implementation preserves the existing chunked route model instead of replacing it with a background worker.
+
 ---
 
 ## 2. Non-Negotiable Rules

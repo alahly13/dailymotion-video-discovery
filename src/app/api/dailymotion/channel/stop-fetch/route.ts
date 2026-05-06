@@ -4,13 +4,13 @@ import { stopChannelFetchJob } from "@/lib/platforms/dailymotion/channel-deep-fe
 export async function POST(request: Request) {
   try {
     const body = (await request.json().catch(() => ({}))) as { jobId?: string };
-    if (body.jobId) return NextResponse.json({ ok: true, job: stopChannelFetchJob(body.jobId) });
+    if (body.jobId) return NextResponse.json({ ok: true, job: await stopChannelFetchJob(body.jobId) });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Unable to stop fetch job." }, { status: 400 });
   }
 
   return NextResponse.json({
     ok: true,
-    message: "Client-side AbortController stops legacy in-flight fetches. Route-backed channel jobs use /api/dailymotion/channel/jobs/stop and preserve runtime resume checkpoints.",
+    message: "Client-side AbortController stops legacy in-flight fetches. Route-backed channel jobs use /api/dailymotion/channel/jobs/stop and preserve database resume checkpoints when manifest persistence is enabled.",
   });
 }

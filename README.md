@@ -1,20 +1,30 @@
 # AI Public Video Discovery Platform
 
-A Next.js 16 App Router MVP for public Dailymotion video metadata discovery. The core feature is the Dailymotion Channel Explorer: enter a public channel URL, profile URL, username, or channel ID; fetch public metadata; build a Channel Manifest; and apply advanced filters locally to the current manifest only.
+Next.js App Router application for public Dailymotion video metadata discovery and research.
 
-This project is **not** a video downloader. It does not download, rehost, scrape private streams, bypass restrictions, fabricate videos, or expose server-only API keys.
+## 2026 upgrade highlights
+
+- Supabase SSR client helpers for browser/server/middleware session handling.
+- Prisma datasource migrated from SQLite MVP to Supabase PostgreSQL (`DATABASE_URL` + `DIRECT_URL`).
+- New durable relational schema for canonical videos, sources, manifests, manifest items, fetch jobs, and user saved videos.
+- Typed environment validation with Zod and fail-fast env parsing.
+- Database scripts for generation/migrate/push/studio.
+
+## Safety scope
+
+This platform is **not** a downloader. It does not download/rehost videos, scrape private streams, or bypass platform restrictions.
 
 ## Setup
 
 ```bash
 npm install
 cp .env.example .env.local
+npm run db:generate
 npm run dev
 ```
 
-## Key safety defaults
+## Vercel notes
 
-- Fetch All uses Dailymotion public API pagination only.
-- Server-only env variables include `GEMINI_API_KEY`, `DATABASE_URL`, and `DAILYMOTION_API_BASE_URL`.
-- `NEXT_PUBLIC_APP_URL` is the only browser-safe env variable in the MVP.
-- Filters are pure utilities and treat numeric zero values as valid metadata.
+- Configure all env vars from `.env.example` in Vercel project settings.
+- Keep `GEMINI_API_KEY`, `DATABASE_URL`, `DIRECT_URL`, and `SUPABASE_SERVICE_ROLE_KEY` server-only.
+- Use resumable fetch batches for large channels; avoid one long-running serverless request.

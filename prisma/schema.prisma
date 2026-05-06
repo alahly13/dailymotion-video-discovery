@@ -1,17 +1,137 @@
 generator client { provider = "prisma-client-js" }
-datasource db { provider = "sqlite" url = env("DATABASE_URL") }
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model VideoSource {
+  id             String   @id @default(uuid()) @db.Uuid
+  platform       String
+  sourceType     String
+  externalId     String?
+  canonicalUrl   String?
+  title          String?
+  description    String?
+  thumbnailUrl   String?
+  ownerName      String?
+  rawMetadata    Json?
+  lastFetchedAt  DateTime? @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime  @updatedAt @db.Timestamptz(6)
+  manifests      Manifest[]
+
+  @@unique([platform, sourceType, externalId])
+}
+
+model Video {
+  id                 String   @id @default(uuid()) @db.Uuid
+  platform           String
+  externalVideoId    String
+  canonicalUrl       String?
+  embedUrl           String?
+  title              String
+  description        String?
+  thumbnailUrl       String?
+  durationSeconds    Int?
+  views              BigInt?
+  rating             Decimal? @db.Decimal(6, 3)
+  language           String?
+  createdAtPlatform  DateTime? @db.Timestamptz(6)
+  year               Int?
+  channelExternalId  String?
+  channelName        String?
+  ownerExternalId    String?
+  ownerName          String?
+  tags               String[]
+  hasThumbnail       Boolean @default(false)
+  hasDescription     Boolean @default(false)
+  rawMetadata        Json?
+  metadataHash       String?
+  firstSeenAt        DateTime? @db.Timestamptz(6)
+  lastSeenAt         DateTime? @db.Timestamptz(6)
+  updatedAt          DateTime @updatedAt @db.Timestamptz(6)
+  manifestItems      ManifestItem[]
+  savedVideos        SavedVideo[]
+
+  @@unique([platform, externalVideoId])
+}
+
+model Manifest {
+  id               String   @id @default(uuid()) @db.Uuid
+  userId           String?  @db.Uuid
+  manifestType     String
+  platform         String
+  sourceId         String?  @db.Uuid
+  sourceInput      String?
+  sourceUrl        String?
+  query            String?
+  filterSnapshot   Json?
+  status           String
+  isComplete       Boolean  @default(false)
+  isPartial        Boolean  @default(false)
+  totalKnownItems  BigInt?
+  totalFetchedItems BigInt  @default(0)
+  pagesFetched     Int      @default(0)
+  requestId        String?
+  createdAt        DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime @updatedAt @db.Timestamptz(6)
+  expiresAt        DateTime? @db.Timestamptz(6)
+  source           VideoSource? @relation(fields: [sourceId], references: [id])
+  items            ManifestItem[]
+  fetchJobs        FetchJob[]
+}
+
+model ManifestItem {
+  id           String   @id @default(uuid()) @db.Uuid
+  manifestId   String   @db.Uuid
+  videoId      String   @db.Uuid
+  position     BigInt
+  pageNumber   Int?
+  matchedReason String?
+  aiScore      Decimal? @db.Decimal(6, 3)
+  createdAt    DateTime @default(now()) @db.Timestamptz(6)
+  manifest     Manifest @relation(fields: [manifestId], references: [id], onDelete: Cascade)
+  video        Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([manifestId, videoId])
+}
+
+model FetchJob {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String?  @db.Uuid
+  manifestId   String   @db.Uuid
+  platform     String
+  jobType      String
+  status       String
+  sourceInput  String?
+  sourceUrl    String?
+  cursor       String?
+  nextPageUrl  String?
+  currentPage  Int      @default(0)
+  itemsFetched BigInt   @default(0)
+  maxPages     Int?
+  maxItems     BigInt?
+  delayMs      Int?
+  errorMessage String?
+  startedAt    DateTime? @db.Timestamptz(6)
+  stoppedAt    DateTime? @db.Timestamptz(6)
+  completedAt  DateTime? @db.Timestamptz(6)
+  createdAt    DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(6)
+  manifest     Manifest @relation(fields: [manifestId], references: [id], onDelete: Cascade)
+}
 
 model SavedVideo {
-  id          String   @id
-  platform    String
-  url         String?
-  title       String
-  description String?
-  thumbnail   String?
-  duration    Int?
-  views       Int?
-  language    String?
-  createdAt   DateTime?
-  savedAt     DateTime @default(now())
-  rawJson      String?
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  videoId   String   @db.Uuid
+  favorite  Boolean  @default(false)
+  notes     String?
+  savedAt   DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, videoId])
 }

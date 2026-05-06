@@ -1,6 +1,19 @@
 # Project Ledger
 
 
+## 2026-05-06 — GitHub Actions migration workflow hardening audit
+
+- Audited and updated `.github/workflows/db-migrate.yml` for manual `workflow_dispatch`-only execution with required inputs (`confirm`, `environment`, `run_apply`).
+- Added preflight secrets-presence gate that fails closed when `DATABASE_URL` or `DIRECT_URL` are missing from GitHub Actions secrets.
+- Added pre-migration `npm run db:status` and post-migration `npm run db:status` checks so failures stop before apply and verification runs after.
+- Added explicit confirmation gate so `db:apply` runs only when `run_apply=true` and confirmation input is `APPLY`/`true`; otherwise workflow runs safe status-only path.
+- Kept apply path on `npm run db:apply` with `CONFIRM_DB_APPLY=true`; no destructive commands (`migrate reset`, table drops, or `db push` production apply path) were introduced.
+- Confirmed Prisma 7.8 config model remains compatible (`prisma.config.ts` datasource env resolution + provider-only datasource in `prisma/schema.prisma`).
+- Confirmed Supabase Session Pooler compatibility is preserved for both `DATABASE_URL` and `DIRECT_URL` in scripts/docs.
+- Updated README GitHub Actions section with exact secret path, manual run flow, status-only mode, and Vercel build prohibition for migrations.
+- Files changed: `.github/workflows/db-migrate.yml`, `README.md`, `PROJECT_LEDGER.md`.
+- Verification in this environment: YAML parsed successfully; `npm run db:validate` passed with safe placeholder URLs; `npm run typecheck` passed; real migration apply execution must be run by user in GitHub Actions with repository secrets.
+
 ## 2026-05-06 — Prisma 7.8 datasource config fix for Session Pooler workflows
 
 - Added root `prisma.config.ts` and moved datasource `url`/`directUrl` resolution there using `prisma/config` + `env()` for Prisma CLI 7.8 compatibility.

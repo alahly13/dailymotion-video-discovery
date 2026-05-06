@@ -35,7 +35,7 @@ export default function ChannelExplorerPage() {
     setError(null);
     const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ input, requestId }), signal: controller.signal });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error ?? "Request failed.");
+    if (!response.ok && !data?.manifest) throw new Error(data.error ?? "Request failed.");
     if (latestRequestId.current !== requestId) return null;
     return data;
   }
@@ -54,6 +54,7 @@ export default function ChannelExplorerPage() {
     try {
       const data = await runJson(path);
       if (data?.manifest) setManifest(data.manifest);
+      if (data && data.ok === false && data.error) setError(data.error);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
       setError(err instanceof Error ? err.message : "Fetch failed.");

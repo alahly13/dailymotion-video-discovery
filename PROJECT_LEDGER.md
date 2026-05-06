@@ -20,3 +20,14 @@
 - Added db scripts: `db:generate`, `db:migrate`, `db:push`, `db:studio`.
 - Verification: typecheck/build not executed in this pass because package lock/install refresh is required after dependency changes.
 - Limitation: this change establishes database + Supabase foundations; route-by-route migration to persisted manifests/fetch jobs remains incremental to preserve current working channel explorer behavior.
+
+## 2026-05-06 — External integration hardening and optional Dailymotion key
+
+- Refactored env parsing into required server/public + optional server env buckets; added defaults and helper accessors.
+- Confirmed `DAILYMOTION_API_KEY` remains server-only and optional, with public metadata mode by default.
+- Added typed safe result model for Dailymotion calls with timeout, status/reason mapping, and controlled unauthorized/rate-limit/network handling.
+- Updated channel fetch-all route to preserve partial manifest items on mid-stream failures and return retry metadata.
+- Updated AI client/routes to return controlled unavailable/missing-config payloads without leaking internals.
+- Updated `.env.example` and README docs for Vercel-first workflows and required/optional env behavior.
+- Verification: `npm run typecheck` currently fails due to pre-existing type issues in this patch (see command output).
+- Limitation: full persisted fetch-job resume flow is not yet implemented; this change preserves partial manifest in API/UI response for safe retry UX.

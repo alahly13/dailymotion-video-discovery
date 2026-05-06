@@ -28,3 +28,12 @@ npm run dev
 - Configure all env vars from `.env.example` in Vercel project settings.
 - Keep `GEMINI_API_KEY`, `DATABASE_URL`, `DIRECT_URL`, and `SUPABASE_SERVICE_ROLE_KEY` server-only.
 - Use resumable fetch batches for large channels; avoid one long-running serverless request.
+
+## Environment and fallback behavior
+
+- `DAILYMOTION_API_KEY` is optional. Public Dailymotion metadata routes run without it where endpoints allow anonymous access.
+- Required envs fail fast: `DATABASE_URL`, `DIRECT_URL`, `GEMINI_API_KEY`, `NEXT_PUBLIC_APP_URL`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`.
+- Optional envs never block startup; they only limit related features.
+- Dailymotion API failures return typed safe responses (`rate_limited`, `network_error`, `invalid_response`, `unauthorized`, `unavailable`) and preserve partial manifest data.
+- Gemini failures are isolated to AI routes and return controlled `ok: false` payloads.
+- Supabase service role key is optional/server-only and should only be used for privileged flows.

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { publicEnv } from "./public-env";
 
 const postgresUrlSchema = z.string().url().refine((value) => {
   try {
@@ -9,30 +10,11 @@ const postgresUrlSchema = z.string().url().refine((value) => {
   }
 }, "Must be a postgres:// or postgresql:// URL.");
 
-const requiredServerSchema = z.object({
+const databaseSchema = z.object({
   DATABASE_URL: postgresUrlSchema,
-  DIRECT_URL: postgresUrlSchema,
-  GEMINI_API_KEY: z.string().min(1),
 });
-
-const publicSchema = z.object({
-  NEXT_PUBLIC_APP_URL: z.string().url(),
-  NEXT_PUBLIC_SUPABASE_URL: z.string().url(),
-  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: z.string().min(1),
-});
-
 
 const isBuildTime = process.env.NEXT_PHASE === "phase-production-build";
-
-function parseOrStub<T>(schema: z.ZodType<T>, values: unknown, stub: T, scope: string): T {
-  const parsed = schema.safeParse(values);
-  if (parsed.success) return parsed.data;
-  if (isBuildTime) {
-    console.warn(`⚠️ Skipping strict ${scope} env validation during Next.js production build.`);
-    return stub;
-  }
-  throw parsed.error;
-}
 
 const optionalServerSchema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
@@ -56,34 +38,65 @@ function isSupabaseDirectHost(raw: string) {
   }
 }
 
-export const serverEnv = parseOrStub(requiredServerSchema, process.env, {
-  DATABASE_URL: "postgresql://build:build@localhost:5432/build",
-  DIRECT_URL: "postgresql://build:build@localhost:5432/build",
-  GEMINI_API_KEY: "build-placeholder",
-}, "server");
-export const publicEnv = parseOrStub(publicSchema, process.env, {
-  NEXT_PUBLIC_APP_URL: "https://example.com",
-  NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
-  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "build-placeholder",
-}, "public");
-export const optionalServerEnv = optionalServerSchema.parse(process.env);
+let hasWarnedSupabaseDirect = false;
+let cachedDatabaseEnv: z.infer<typeof databaseSchema> | null = null;
 
-if (isSupabaseDirectHost(serverEnv.DIRECT_URL)) {
-  console.warn(
-    "⚠️ DIRECT_URL uses Supabase direct host (db.<project-ref>.supabase.co). " +
-      "This may fail in IPv4-only online environments (Vercel/Codespaces/GitHub Actions) unless IPv6 or Supabase IPv4 add-on is available."
-  );
+export function getDatabaseEnv() {
+  if (cachedDatabaseEnv) return cachedDatabaseEnv;
+
+  const rawDatabaseUrl = process.env.DATABASE_URL?.trim();
+  const values = {
+    DATABASE_URL: rawDatabaseUrl,
+  };
+
+  const parsed = databaseSchema.safeParse(values);
+  if (!parsed.success) {
+    if (isBuildTime) {
+      console.warn("[WARN] Skipping strict database env validation during Next.js production build.");
+      cachedDatabaseEnv = {
+        DATABASE_URL: "postgresql://build:build@localhost:5432/build",
+      };
+      return cachedDatabaseEnv;
+    }
+
+    throw parsed.error;
+  }
+
+  cachedDatabaseEnv = {
+    DATABASE_URL: parsed.data.DATABASE_URL,
+  };
+
+  if (!hasWarnedSupabaseDirect && isSupabaseDirectHost(cachedDatabaseEnv.DATABASE_URL)) {
+    console.warn(
+      "[WARN] DATABASE_URL uses Supabase direct host (db.<project-ref>.supabase.co). " +
+        "Use the Supabase Session Pooler URL for this project to avoid IPv4-limited connection failures."
+    );
+    hasWarnedSupabaseDirect = true;
+  }
+
+  return cachedDatabaseEnv;
 }
 
+export const optionalServerEnv = optionalServerSchema.parse(process.env);
+
 export const env = {
-  geminiApiKey: serverEnv.GEMINI_API_KEY,
-  databaseUrl: serverEnv.DATABASE_URL,
-  directUrl: serverEnv.DIRECT_URL,
-  dailymotionApiBaseUrl: optionalServerEnv.DAILYMOTION_API_BASE_URL,
-  publicAppUrl: publicEnv.NEXT_PUBLIC_APP_URL,
+  get geminiApiKey() {
+    return requireServerEnv("GEMINI_API_KEY");
+  },
+  get databaseUrl() {
+    return getDatabaseEnv().DATABASE_URL;
+  },
+  get dailymotionApiBaseUrl() {
+    return optionalServerEnv.DAILYMOTION_API_BASE_URL;
+  },
+  get publicAppUrl() {
+    return publicEnv.NEXT_PUBLIC_APP_URL;
+  },
 };
 
-export function requireServerEnv(name: "GEMINI_API_KEY" | "DATABASE_URL" | "DIRECT_URL") {
+export function requireServerEnv(name: "GEMINI_API_KEY" | "DATABASE_URL") {
+  if (name === "DATABASE_URL") return getDatabaseEnv().DATABASE_URL;
+
   const value = process.env[name];
   if (!value) throw new Error(`${name} is required on the server.`);
   return value;

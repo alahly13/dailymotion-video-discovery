@@ -1,0 +1,909 @@
+# Dailymotion Discovery Platform Ledger
+
+Updated: 2026-05-06
+Repo path: `F:\discovery\dailymotion-video-discovery`
+Scope: Project source-of-truth ledger, updated after the 2026-05-06 Prisma schema-engine status diagnostic repair.
+
+## Table of Contents
+
+- [Project Identity](#project-identity)
+- [Application Goal](#application-goal)
+- [Current Features](#current-features)
+- [Tech Stack](#tech-stack)
+- [External Connections](#external-connections)
+- [Environment Variables](#environment-variables)
+- [Database and Prisma](#database-and-prisma)
+- [Migration Workflow](#migration-workflow)
+- [Architecture Overview](#architecture-overview)
+- [API Routes](#api-routes)
+- [UI Design System](#ui-design-system)
+- [Folder Structure](#folder-structure)
+- [File-by-File Hints](#file-by-file-hints)
+- [Safety and Security](#safety-and-security)
+- [Known Limitations](#known-limitations)
+- [Future Roadmap](#future-roadmap)
+- [Agent Instructions](#agent-instructions)
+
+## 2026-05-06 Prisma Schema-Engine Status Diagnostic Repair
+
+**Decision**
+
+- `npm run db:status` now runs `scripts/db-status.mjs` instead of raw `prisma migrate status`.
+- The active database workflow remains `DATABASE_URL` only.
+- `DATABASE_URL` remains expected to be the Supabase Session Pooler URL on port `5432`.
+- `DIRECT_URL` was not restored as a config value, fallback, override, or documented active workflow.
+- `prisma` and `@prisma/client` are pinned to the verified aligned `7.8.0` pair instead of floating on `latest`.
+
+**Root cause found**
+
+- Raw `npx prisma migrate status` still targets the Session Pooler host from `DATABASE_URL`, then returns only `Error: Schema engine error:`.
+- A non-mutating Prisma connectivity preflight using `SELECT 1` exposed the underlying blocker that raw migrate status hid.
+- Final diagnostic behavior showed one transient `P1001` reachability failure followed by `P1000` authentication failure against the Session Pooler.
+- Therefore the bare schema-engine error is masking an environment-specific connection/credential problem for the current `DATABASE_URL`, not a `DIRECT_URL` regression, Prisma schema syntax error, or package version mismatch.
+
+**Migration-history truth**
+
+- The repo still has no committed `prisma/migrations` directory.
+- Missing migration history is not the current connection failure because connectivity fails before migration status can inspect `_prisma_migrations`.
+- It remains a separate deploy blocker: Prisma production deploys require committed migration files, not only `schema.prisma`.
+- `scripts/db-apply.mjs` now fails closed before `migrate deploy` if no committed `migration.sql` files exist under `prisma/migrations`.
+
+**Files changed for this entry**
+
+- `package.json`
+- `package-lock.json`
+- `scripts/db-status.mjs`
+- `scripts/db-apply.mjs`
+- `scripts/db-validate-env.mjs`
+- `.github/workflows/db-migrate.yml`
+- `.env.example`
+- `.gitignore`
+- `.agents/skills/supabase/SKILL.md`
+- `Guide-Files/env_backup.txt`
+- `README.md`
+- `PROJECT_LEDGER.md`
+- `dailymotion_discovery_ledger.md`
+
+**Status wrapper behavior**
+
+- Validates `DATABASE_URL` without printing secrets.
+- Prints sanitized protocol, host, port, database, host type, and whether query parameters exist.
+- Warns when local Prisma migration history is missing.
+- Runs `npx prisma db execute --stdin` with `SELECT 1` before migration status.
+- Retries one `P1001` reachability failure once to avoid hiding a stable credential/config problem behind a transient pooler path failure.
+- Runs `prisma migrate status` only after connectivity succeeds.
+- Allows the guarded apply workflow to continue only for pending or uninitialized migration status after connectivity succeeds.
+
+**Session Pooler query-parameter decision**
+
+- Current Supabase Prisma documentation shows the Session Pooler URL on port `5432` for Prisma migrations and app use.
+- The project documentation now states that `pgbouncer=true` is not required for the Session Pooler URL on port `5432`.
+- Prisma/Supabase query parameters should only be added when official troubleshooting for the exact pooler mode requires them.
+
+**Verification**
+
+- Script syntax checks: passed for `scripts/db-status.mjs`, `scripts/db-apply.mjs`, and `scripts/db-validate-env.mjs`.
+- `npm run db:validate`: passed; sanitized output showed Session Pooler host, port `5432`, database `postgres`, and no query params.
+- `npx prisma validate`: passed.
+- `npx prisma generate`: passed and generated Prisma Client `7.8.0`.
+- Raw `npx prisma migrate status`: still returned bare `Error: Schema engine error:` after loading the Session Pooler datasource.
+- `npm run db:status`: now exits 1 with clear diagnostics; current run retried one `P1001` and then reported `P1000` authentication failure.
+- DNS/TCP check: DNS resolved the Session Pooler host; TCP port `5432` succeeded on one returned address and failed on another, matching the transient reachability symptom.
+- `npm run typecheck`: passed.
+- `npm run build`: passed.
+
+**Safety notes**
+
+- `db:apply` was not run.
+- No migration was created.
+- No migration was applied.
+- No reset, drop, or `db push` command was run.
+- No Dailymotion, Gemini, UI, manifest, filter, saved-library, or video-card product logic was changed.
+- Secrets were not intentionally printed. The local backup-like `Guide-Files/env_backup.txt` had secret-looking DB placeholders redacted and was added to `.gitignore`.
+
+## 2026-05-06 Database URL Only Workflow Update
+
+**Decision**
+
+- The active Prisma/database workflow now uses `DATABASE_URL` only.
+- `DATABASE_URL` must be the Supabase Session Pooler connection string for local Windows shells, online agents, Vercel, GitHub Actions, and other IPv4-limited environments.
+- `DIRECT_URL` was removed from active Prisma config, validation scripts, app env validation, runtime env config, examples, and the GitHub migration workflow.
+- Supabase direct hosts such as `db.<project-ref>.supabase.co` are kept only as a warning/reference because they can fail with Prisma `P1001` where IPv6 is unavailable.
+
+**Reason**
+
+- `npm run db:validate` could pass while `npm run db:status` still failed if Prisma selected a stale direct Supabase host.
+- A one-variable policy prevents migration/status commands from targeting a different database than runtime.
+
+**Files changed for this entry**
+
+- `prisma.config.ts`
+- `scripts/db-validate-env.mjs`
+- `scripts/db-apply.mjs`
+- `scripts/app-validate-env.mjs`
+- `src/lib/config/env.ts`
+- `.env.example`
+- `.github/workflows/db-migrate.yml`
+- `README.md`
+- `dailymotion_discovery_ledger.md`
+- `PROJECT_LEDGER.md`
+
+**Verification**
+
+- `npm run db:validate`: passed with `DATABASE_URL` only; printed sanitized protocol/host/port/database/host type and confirmed Prisma CLI/migrations use `DATABASE_URL` only.
+- `npm run db:status`: targeted the Supabase Session Pooler host from `DATABASE_URL`; it did not attempt the Supabase direct host. Prisma then returned a bare schema-engine error, so live migration status still needs follow-up.
+- `npm run typecheck`: passed.
+- `npm run build`: passed.
+- Active config/script/workflow audit found no `DIRECT_URL` readers.
+- `npm run db:apply` was not run.
+
+**Risks and limitations**
+
+- Local secret-bearing files may still contain old keys, but active project code no longer reads `DIRECT_URL`.
+- `DATABASE_URL` must be a valid, percent-encoded Supabase Session Pooler URL.
+- The repo snapshot still has no `prisma/migrations` directory, so migration-status behavior may remain limited until committed migrations exist or Prisma's schema-engine error is investigated against the real database.
+
+## Project Identity
+
+**Project name**
+
+AI Public Video Discovery Platform
+
+**Short description**
+
+A Next.js App Router application for researching public Dailymotion video metadata through manifests, filters, previews, and server-side AI helper routes.
+
+**Main mission**
+
+Help a researcher, analyst, or future product team discover, inspect, organize, and summarize public video metadata without downloading or rehosting video files.
+
+**What problem the platform solves**
+
+- Public video research is noisy when every search starts from scratch.
+- Channel exploration often needs deduplication, pagination, stop/resume safety, and filtering by real metadata.
+- Teams need a structured way to move from raw feed results to a reusable manifest that can be filtered, summarized, and eventually persisted.
+
+**What the platform is not allowed to do**
+
+- It is not a video downloader.
+- It must not rehost or copy raw videos.
+- It must not scrape private streams or bypass platform restrictions.
+- AI features must not invent videos, channels, counts, or URLs.
+
+**2026 product vision**
+
+- Evolve from a Dailymotion-only MVP into a multi-platform public video research workspace.
+- Add durable persistence for manifests, fetch jobs, and saved collections on Supabase/Postgres.
+- Expand AI from helper text responses into structured indexing, semantic search, and workflow support.
+- Keep the product safe, metadata-only, and suitable for Vercel-hosted online-first workflows.
+
+## Application Goal
+
+The app is built around the idea of **AI Public Video Discovery**: use real public metadata as the source of truth, shape it into manifests, and let filters and AI operate only on what the app actually fetched.
+
+**Dailymotion public metadata discovery**
+
+- The current platform adapter targets Dailymotion public endpoints.
+- The app fetches titles, descriptions, thumbnails, duration, views, language, channel info, owner info, tags, and public URLs.
+- Metadata is normalized into a common `NormalizedVideoMetadata` shape before the UI touches it.
+
+**Channel Explorer**
+
+- The main product surface today is `/channel-explorer`.
+- It accepts channel URLs, profile URLs, usernames, and channel IDs.
+- It can analyze the input, fetch the first page, or fetch all public pages with safety limits and delays.
+
+**Manifests and why they exist**
+
+- A manifest is the app's working set of fetched metadata.
+- It gives the UI a stable structure for filtering, sorting, previewing, summarizing, and eventually persisting.
+- The current explorer mostly uses in-memory manifests returned from API routes.
+
+**Advanced filtering and AI helper features**
+
+- Filters support keyword, views, duration, year/date, language, channel/owner, thumbnail/description presence, and sorting.
+- AI routes help parse search intent, suggest filters, and summarize manifests.
+- AI is intentionally constrained by a safety prompt so it only discusses real fetched metadata.
+
+## Current Features
+
+| Feature | Status | Notes |
+| --- | --- | --- |
+| Home / Dashboard | Implemented | Entry page with product framing and navigation into core work areas. |
+| Search | Partial UI | UI shell exists and `/api/dailymotion/search` exists, but the page itself is still placeholder-oriented. |
+| AI Search | Partial UI | Page explains available AI capabilities; no full chat/search workflow yet. |
+| Channel Explorer | Implemented MVP | Primary working feature with analyze, fetch, fetch-all, stop, filters, results, and AI helper panel. |
+| Dailymotion public metadata fetching | Implemented | Uses Dailymotion public API fields and normalization helpers. |
+| Fetch All / paginated fetching | Implemented | Uses page size, max page/item caps, and inter-page delay. |
+| Stop Fetching / partial manifests | Implemented client-side | Browser `AbortController` stops requests; partial manifests remain visible. |
+| Advanced filters | Implemented | Client-side filtering plus a server route for filtering supplied items. |
+| Video cards | Implemented | Stable thumbnail ratio, grouped metadata, line clamping, and external open action. |
+| Hover preview | Implemented | Uses Dailymotion embed iframe when `embedUrl` is available. |
+| Saved Library | Placeholder UI | Persistence model exists, but end-user saved video workflow is not wired yet. |
+| Supabase / Postgres foundation | Implemented foundation | Env validation, session helpers, schema, and workflow docs are present. |
+| Prisma migration workflow | Implemented foundation | Validate/status/apply scripts plus GitHub Actions workflow exist. |
+| Gemini AI integration | Implemented foundation | Three server routes call Gemini with controlled error handling. |
+| Light / Dark mode | Implemented | CSS token system with localStorage persistence and system fallback. |
+| Theme toggle | Implemented | Header icon toggle updates the root theme class and dataset. |
+| Responsive UI | Implemented | Layouts use responsive grids, stacked header nav, and adaptive result grids. |
+
+## Tech Stack
+
+**Framework and language**
+
+- Next.js `16.2.4`
+- React `19.2.5`
+- React DOM `19.2.5`
+- TypeScript `6.0.3`
+- App Router architecture
+
+**Styling and UI**
+
+- Tailwind CSS `4.2.4`
+- `@tailwindcss/postcss` `4.2.4`
+- Custom UI primitives in `src/components/ui`
+- `@radix-ui/react-slot` `1.2.4`
+- `class-variance-authority` `0.7.1`
+- `clsx` `2.1.1`
+- `tailwind-merge` `3.5.0`
+- `lucide-react` `1.14.0`
+
+**Data, validation, and state**
+
+- Prisma `7.8.0`
+- `@prisma/client` `7.8.0`
+- PostgreSQL via Supabase
+- `zod` `4.4.3`
+- `zustand` `5.0.13`
+- `dotenv` `17.4.2`
+
+**Platform integrations**
+
+- `@supabase/supabase-js` `2.105.3`
+- `@supabase/ssr` `0.10.2`
+- `@google/generative-ai` `0.24.1`
+- Dailymotion public API
+
+**Installed but not visibly active in scanned UI code**
+
+- `framer-motion` `12.38.0` is installed, but there were no visible imports in the scanned `src` files.
+
+## External Connections
+
+**Supabase connection strategy**
+
+- Runtime database access is documented around `DATABASE_URL`.
+- The recommended connection for this repo's online-first workflow is the Supabase Session Pooler.
+- Direct Supabase hosts may fail in IPv4-only environments.
+
+**Supabase Session Pooler usage**
+
+- `.env.example` and README both recommend a Session Pooler URL for `DATABASE_URL`.
+- DB scripts classify pooler hosts and print only sanitized host metadata.
+
+**DATABASE_URL behavior**
+
+- Required for DB validation, runtime DB access, Prisma CLI, migration status, migration deploy, client generation, and Prisma Studio.
+- Required in local `.env.local`, Vercel env vars, and GitHub Actions if migration/status commands are used.
+
+**DIRECT_URL policy**
+
+- Removed from the active project workflow.
+- It is not a supported env variable, fallback, override, or duplicate connection string in this repo.
+- Supabase direct connection strings are mentioned only as a warning/reference for Prisma `P1001` risk in IPv4-limited environments.
+
+**Gemini API server-only behavior**
+
+- `GEMINI_API_KEY` is server-only.
+- AI routes return controlled error payloads when the key is missing or the API is unavailable.
+- The Gemini helper uses model `gemini-1.5-flash`.
+
+**Dailymotion API / public metadata behavior**
+
+- Works through public metadata endpoints.
+- Supports anonymous requests where Dailymotion allows them.
+- `DAILYMOTION_API_KEY` is optional and only added as a Bearer token when configured.
+
+**Vercel deployment behavior**
+
+- `npm run build` executes `scripts/app-validate-env.mjs` before `next build`.
+- Public env parsing and database env parsing include build-time guard stubs for the Next.js production build phase.
+- Proxy/session refresh lives in `src/proxy.ts`, which aligns with Next.js 16.
+
+**GitHub Actions migration workflow**
+
+- `.github/workflows/db-migrate.yml` is manual-only.
+- It validates `DATABASE_URL`, runs pre-status, gates apply with confirmation, then runs post-status.
+
+## Environment Variables
+
+**Notes**
+
+- Real `.env` data was not copied into this ledger.
+- A local `.env` file exists and appears populated; treat it as sensitive.
+- Use `.env.example` as the documented contract.
+
+| Key | Class | Required now | Purpose | Where to get or set it | Missing behavior / default |
+| --- | --- | --- | --- | --- | --- |
+| `NEXT_PUBLIC_APP_URL` | Public / browser-safe | Yes | Public base URL for the app. | Local `.env.local`, Vercel env vars. | Build env validation fails if missing. |
+| `NEXT_PUBLIC_SUPABASE_URL` | Public / browser-safe | Yes | Public Supabase project URL for browser/server SSR clients. | Supabase project settings. | Build env validation fails if missing. |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Public / browser-safe | Yes | Browser-safe Supabase publishable key. | Supabase project settings. | Build env validation fails if missing. |
+| `DATABASE_URL` | Server-only required | Yes | Canonical Postgres connection string for runtime, Prisma CLI, migration status, migration deploy, client generation, and Prisma Studio. | Supabase Connect page; use the Session Pooler URL. | DB scripts fail if missing or invalid. |
+| `GEMINI_API_KEY` | Server-only required | Yes for AI routes | Enables Gemini-backed AI helper routes. | Google AI Studio or configured provider flow. | AI routes return unavailable/missing-config errors. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Server-only optional | No | Reserved for privileged server-side Supabase operations. | Supabase project settings. | Not required by visible runtime paths. |
+| `DAILYMOTION_API_BASE_URL` | Server-only optional | No | Base URL for Dailymotion API requests. | Usually keep default. | Defaults to `https://api.dailymotion.com`. |
+| `DAILYMOTION_API_KEY` | Server-only optional | No | Optional Bearer token for Dailymotion endpoints that need auth. | Dailymotion developer account if applicable. | Public metadata fetching still attempts anonymous access. |
+| `CRON_SECRET` | Server-only optional | No | Future secret for scheduled or protected cron entrypoints. | Self-generated. | No visible effect in scanned runtime routes. |
+| `WEBHOOK_SECRET` | Server-only optional | No | Future secret for protected webhook handlers. | Self-generated. | No visible effect in scanned runtime routes. |
+| `ENABLE_PGVECTOR` | Feature flag | No | Future toggle for pgvector and semantic features. | Local or deployment env. | Defaults to `false`. |
+| `ENABLE_MANIFEST_PERSISTENCE` | Feature flag | No | Future or partial toggle for persisted manifests. | Local or deployment env. | Defaults to `true`, but current explorer still uses in-memory manifests. |
+| `MAX_CHANNEL_FETCH_PAGES` | Safety limit | No | Upper bound for fetch-all pagination pages. | Local or deployment env. | Defaults to `200`. |
+| `MAX_CHANNEL_FETCH_ITEMS` | Safety limit | No | Upper bound for total fetched items in fetch-all mode. | Local or deployment env. | Defaults to `10000`. |
+| `CHANNEL_FETCH_DELAY_MS` | Safety limit | No | Delay between fetch-all page requests. | Local or deployment env. | Defaults to `250`. |
+| `AI_EMBEDDING_MODEL` | Future-only | No | Placeholder for future embeddings or semantic search work. | Future AI provider config. | No visible effect in current runtime code. |
+
+**Accepted values and DB URL notes**
+
+- `DATABASE_URL` must be a `postgres://` or `postgresql://` URL.
+- Use the Supabase Session Pooler host shape `aws-0-<region>.pooler.supabase.com`.
+- Percent-encode reserved password characters such as `#`, `@`, `?`, `/`, and `$` before pasting DB URLs.
+- `ENABLE_PGVECTOR` and `ENABLE_MANIFEST_PERSISTENCE` accept string values `true` or `false`.
+- Safety limits are parsed as integers.
+
+## Database and Prisma
+
+**Prisma's role**
+
+- Defines the relational schema.
+- Powers client generation and migration/status workflows.
+- Is not visibly used by runtime route handlers yet; the scanned `src` code did not show `@prisma/client` imports in app logic.
+- Current installed and locked Prisma version pair is `prisma` `7.8.0` and `@prisma/client` `7.8.0`.
+
+**Supabase / Postgres role**
+
+- Supabase provides the managed Postgres target and SSR auth/session foundation.
+- Postgres is intended to persist videos, sources, manifests, jobs, and saved items as the app matures beyond in-memory manifests.
+
+**`prisma.config.ts`**
+
+- Loads dotenv-backed env files in priority order.
+- Resolves the Prisma CLI datasource URL from `DATABASE_URL` only.
+- Documents why this project uses the Supabase Session Pooler instead of direct Supabase hosts.
+
+```text
+Prisma CLI -> DATABASE_URL -> Supabase Session Pooler
+```
+
+**`prisma/schema.prisma`**
+
+- Keeps the datasource provider as `postgresql`.
+- Defines the data model without embedding connection strings in the schema file.
+
+**Migration commands**
+
+```bash
+npm run db:validate
+npm run db:status
+npm run db:apply
+npm run db:migrate:deploy
+npm run db:create-migration
+npm run db:generate
+npm run db:studio
+```
+
+**Migration status diagnostics**
+
+- `npm run db:status` is a project wrapper, not raw Prisma.
+- The wrapper validates env, checks Prisma connectivity with a non-mutating `SELECT 1`, then runs `prisma migrate status` only after connectivity succeeds.
+- Current live diagnosis is blocked by Session Pooler connection/authentication (`P1001` transient reachability followed by `P1000` authentication failure), while raw Prisma still reports only a bare schema-engine error.
+
+**Why `DATABASE_URL` is the required DB variable**
+
+- It is the single canonical connection variable for runtime and default CLI behavior.
+- It supports the practical Supabase Session Pooler workflow for Vercel, Codespaces, GitHub Actions, and Windows environments.
+
+**Why `DIRECT_URL` was removed from active workflow**
+
+- Supabase direct hosts can be unavailable in IPv4-only environments.
+- Keeping a second migration URL allowed Prisma status/apply commands to target a stale direct host while validation passed against the pooler.
+- A one-variable policy keeps runtime, status, deploy, and generated-client workflows aligned.
+
+**Database models**
+
+| Model | Purpose |
+| --- | --- |
+| `VideoSource` | Tracks a source entity such as a channel, profile, or external source record. |
+| `Video` | Stores normalized video metadata across platforms. |
+| `Manifest` | Stores a manifest header, origin, status, and counts. |
+| `ManifestItem` | Joins a manifest to specific videos with ordering and AI score fields. |
+| `FetchJob` | Tracks long-running fetch work, cursors, limits, status, and errors. |
+| `SavedVideo` | Represents a per-user saved or favorited video entry with notes. |
+
+**Current schema reality**
+
+- The schema is ready for persistence.
+- No `prisma/migrations` directory is committed in the current repo snapshot, so migration files are not yet committed here.
+- `db:apply` now refuses to run `migrate deploy` until reviewed Prisma migration files exist.
+
+## Migration Workflow
+
+**Local / online workflow**
+
+```bash
+npm install
+cp .env.example .env.local
+npm run db:validate
+npm run db:status
+CONFIRM_DB_APPLY=true npm run db:apply
+```
+
+**Dotenv loading**
+
+- `scripts/load-project-env.mjs` is the shared loader for standalone Node scripts.
+- It reads `.env.local`, `.env`, `.env.development`, and `.env.production`.
+- Real environment variables always win because `dotenv` is loaded with `override: false`.
+
+**What each DB script does**
+
+- `db:validate`: validates DB env and prints sanitized connection metadata only.
+- `db:status`: validates env, warns about missing local migration history, checks Prisma connectivity with `SELECT 1`, then runs `prisma migrate status` only after connectivity succeeds.
+- `db:apply`: validates env, requires committed migration files, checks status through the wrapper, requires confirmation for production-like targets, runs `migrate deploy`, runs `generate`, and checks status again.
+
+**GitHub Actions workflow**
+
+- Manual `workflow_dispatch` only.
+- Requires `DATABASE_URL`.
+- Confirmation gate prevents accidental apply runs.
+
+**Why `prisma migrate deploy` is used**
+
+- It is the production-safe apply path for committed migration files.
+- It avoids the drift and risk of `prisma db push` as a production migration strategy.
+- It is intentionally blocked by this repo when no committed `prisma/migrations/**/migration.sql` files exist.
+
+**Commands to avoid**
+
+- Do not run `prisma migrate reset` in shared or production-like environments.
+- Do not drop tables as part of helper automation.
+- Do not treat `db:apply` as safe without verifying the target database.
+
+## Architecture Overview
+
+**High-level request flow**
+
+1. A page or UI action sends JSON to an App Router API route.
+2. The route calls `src/lib` helpers for parsing, fetching, normalization, filtering, or AI.
+3. Helpers return normalized metadata or controlled error states.
+4. The page renders the manifest or error state without needing raw provider-specific data shapes.
+
+**Search flow**
+
+1. Client submits a search query.
+2. `POST /api/dailymotion/search` calls the Dailymotion client.
+3. Results are normalized.
+4. A temporary search manifest is created and returned.
+5. The current `/search` page is still a placeholder shell, so this flow is foundation-first.
+
+**Channel Explorer flow**
+
+1. User enters a Dailymotion channel/profile/user input.
+2. The page can call analyze, fetch, or fetch-all routes.
+3. Input analysis resolves the source type and API path.
+4. Results are normalized into a `ChannelManifest`.
+5. The page applies client-side filters and renders cards.
+
+**Manifest creation flow**
+
+1. Provider results are normalized into `NormalizedVideoMetadata`.
+2. `createChannelManifest` or `createTemporarySearchManifest` wraps items with manifest metadata.
+3. `dedupeVideos` removes duplicates by app-level video ID.
+
+**Filtering flow**
+
+1. The page keeps a filter object in local state.
+2. `applyAdvancedVideoFilters` applies keyword, numeric, date, metadata-presence, and sort logic.
+3. `strictMetadataFiltering` decides whether missing metadata should fail a filter.
+
+**AI helper flow**
+
+1. An API route receives a query, instruction, or manifest.
+2. The route prepends the shared safety prompt.
+3. Gemini returns text output.
+4. The route returns the text or a controlled error message.
+
+**Saved Library flow**
+
+- UI surface exists at `/saved`.
+- Database model `SavedVideo` exists.
+- No visible runtime route or UI action yet writes saved entries into the database.
+
+**Theme / UI flow**
+
+1. `layout.tsx` injects a no-flash theme bootstrapping script.
+2. `ThemeToggle` writes the chosen theme to `localStorage`.
+3. CSS variables in `globals.css` drive the actual light/dark look.
+
+## API Routes
+
+| Route | Method | Purpose | Main dependencies | Safety behavior |
+| --- | --- | --- | --- | --- |
+| `/api/dailymotion/channel/analyze` | `POST` | Parse channel/profile/user input into a source descriptor. | `dailymotion-url-analyzer.ts` | Returns `400` with a controlled error on invalid input. |
+| `/api/dailymotion/channel/fetch` | `POST` | Fetch the first page of a channel feed and wrap it in a manifest. | `dailymotion-channel-service.ts` | Returns controlled `rate_limited`, `unknown`, or provider errors. |
+| `/api/dailymotion/channel/fetch-all` | `POST` | Paginate through public channel results with dedupe, delay, and safety caps. | Dailymotion client, manifest builder, fetch safety config | Preserves partial manifests on failure and exposes retry context. |
+| `/api/dailymotion/channel/stop-fetch` | `POST` | Explain stop behavior. | None | Safe informational route only; no server-side job cancellation. |
+| `/api/dailymotion/search` | `POST` | Search global Dailymotion video metadata and build a temporary manifest. | Dailymotion client, temporary manifest builder | Rejects empty queries and returns controlled provider errors. |
+| `/api/manifests/channel/filter` | `POST` | Apply advanced filters to supplied manifest items. | `apply-advanced-video-filters.ts` | Pure transform over caller-provided items. |
+| `/api/ai/parse-query` | `POST` | Ask Gemini to parse a research query into safe filter text/JSON. | `gemini-client.ts`, `prompts.ts` | Uses AI safety prompt; returns errors instead of hallucinated data. |
+| `/api/ai/filter-helper` | `POST` | Ask Gemini for filter suggestions against a manifest summary. | `gemini-client.ts`, `prompts.ts` | Truncates manifest summary input and limits the AI scope. |
+| `/api/ai/summarize-manifest` | `POST` | Ask Gemini to summarize a manifest without inventing videos. | `gemini-client.ts`, `prompts.ts` | Truncates manifest input and enforces the no-invention safety prompt. |
+
+## UI Design System
+
+**Current design direction**
+
+- Warm, calm SaaS-like research workspace.
+- Reduced card radius compared with the earlier pass.
+- Layered neutral surfaces instead of stark white or pure black.
+
+**Light / dark mode**
+
+- Light mode uses off-white and neutral earth surfaces.
+- Dark mode uses softened green-neutral surfaces rather than pure black.
+- The current palette is driven by CSS custom properties in `src/app/globals.css`.
+
+**Theme tokens**
+
+- Core tokens include `--background`, `--background-elevated`, `--surface`, `--surface-muted`, `--foreground`, `--muted-foreground`, `--card`, `--border`, `--accent`, `--accent-strong`, `--ring`, `--shadow`, `--success`, and `--danger`.
+
+**Video card design**
+
+- Stable `aspect-video` thumbnail region.
+- Line-clamped title and description.
+- Grouped metadata rows for channel, views, duration, date, and language.
+- Zero-safe duration and views handling.
+- External open action and optional hover preview.
+
+**Responsive behavior**
+
+- Header collapses into wrapped nav rows on small screens.
+- Dashboard and search surfaces shift between single-column and multi-column layouts.
+- Results grid scales from one column to four columns.
+- Filter controls reflow across breakpoint grids.
+
+**Filter UI and active chips**
+
+- Filter inputs are token-based custom primitives.
+- Active filters render as chips based on truthy and non-empty values.
+- Sorting is handled through a select with predefined option keys.
+
+## Folder Structure
+
+**Repo tree**
+
+```text
+.
+|-- .agents/
+|   `-- skills/
+|       |-- supabase/
+|       `-- supabase-postgres-best-practices/
+|-- .github/
+|   `-- workflows/
+|       `-- db-migrate.yml
+|-- Guide-Files/
+|   |-- ai_video_discovery_platform_2026_phase_guide.md
+|   |-- env_backup.txt
+|   `-- git_github_arabic_commands_guide.md
+|-- prisma/
+|   `-- schema.prisma
+|-- scripts/
+|   |-- app-validate-env.mjs
+|   |-- db-apply.mjs
+|   |-- db-validate-env.mjs
+|   `-- load-project-env.mjs
+|-- src/
+|   |-- app/
+|   |   |-- ai-search/
+|   |   |   `-- page.tsx
+|   |   |-- api/
+|   |   |   |-- ai/
+|   |   |   |   |-- filter-helper/
+|   |   |   |   |   `-- route.ts
+|   |   |   |   |-- parse-query/
+|   |   |   |   |   `-- route.ts
+|   |   |   |   `-- summarize-manifest/
+|   |   |   |       `-- route.ts
+|   |   |   |-- dailymotion/
+|   |   |   |   |-- channel/
+|   |   |   |   |   |-- analyze/
+|   |   |   |   |   |   `-- route.ts
+|   |   |   |   |   |-- fetch/
+|   |   |   |   |   |   `-- route.ts
+|   |   |   |   |   |-- fetch-all/
+|   |   |   |   |   |   `-- route.ts
+|   |   |   |   |   `-- stop-fetch/
+|   |   |   |   |       `-- route.ts
+|   |   |   |   `-- search/
+|   |   |   |       `-- route.ts
+|   |   |   `-- manifests/
+|   |   |       `-- channel/
+|   |   |           `-- filter/
+|   |   |               `-- route.ts
+|   |   |-- channel-explorer/
+|   |   |   `-- page.tsx
+|   |   |-- channels/
+|   |   |   `-- page.tsx
+|   |   |-- saved/
+|   |   |   `-- page.tsx
+|   |   |-- search/
+|   |   |   `-- page.tsx
+|   |   |-- globals.css
+|   |   |-- layout.tsx
+|   |   `-- page.tsx
+|   |-- components/
+|   |   |-- ai/
+|   |   |   `-- ai-helper-panel.tsx
+|   |   |-- channel-explorer/
+|   |   |   |-- channel-fetch-progress.tsx
+|   |   |   |-- channel-input-panel.tsx
+|   |   |   `-- channel-manifest-summary.tsx
+|   |   |-- filters/
+|   |   |   |-- active-filter-chips.tsx
+|   |   |   `-- advanced-filter-panel.tsx
+|   |   |-- layout/
+|   |   |   |-- app-shell.tsx
+|   |   |   `-- theme-toggle.tsx
+|   |   |-- ui/
+|   |   |   |-- button.tsx
+|   |   |   |-- card.tsx
+|   |   |   `-- input.tsx
+|   |   `-- video/
+|   |       |-- video-card.tsx
+|   |       |-- video-hover-preview.tsx
+|   |       `-- video-results-grid.tsx
+|   |-- lib/
+|   |   |-- ai/
+|   |   |   |-- ai-schemas.ts
+|   |   |   |-- gemini-client.ts
+|   |   |   `-- prompts.ts
+|   |   |-- config/
+|   |   |   |-- env.ts
+|   |   |   `-- public-env.ts
+|   |   |-- filters/
+|   |   |   |-- apply-advanced-video-filters.ts
+|   |   |   `-- filter-types.ts
+|   |   |-- manifests/
+|   |   |   |-- channel-manifest.ts
+|   |   |   `-- temporary-search-manifest.ts
+|   |   |-- platforms/
+|   |   |   `-- dailymotion/
+|   |   |       |-- dailymotion-channel-service.ts
+|   |   |       |-- dailymotion-client.ts
+|   |   |       |-- dailymotion-normalize.ts
+|   |   |       `-- dailymotion-url-analyzer.ts
+|   |   |-- supabase/
+|   |   |   |-- client.ts
+|   |   |   |-- middleware.ts
+|   |   |   `-- server.ts
+|   |   `-- utils/
+|   |       |-- cn.ts
+|   |       `-- zero-safe-number.ts
+|   |-- stores/
+|   |   |-- channel-manifest-store.ts
+|   |   `-- search-store.ts
+|   |-- types/
+|   |   |-- filters.ts
+|   |   |-- manifest.ts
+|   |   |-- platform.ts
+|   |   `-- video.ts
+|   `-- proxy.ts
+|-- .env.example
+|-- .gitignore
+|-- PROJECT_LEDGER.md
+|-- README.md
+|-- dailymotion_discovery_ledger.md
+|-- next-env.d.ts
+|-- next.config.ts
+|-- package-lock.json
+|-- package.json
+|-- postcss.config.mjs
+|-- prisma.config.ts
+|-- skills-lock.json
+`-- tsconfig.json
+```
+
+**Major folder purposes**
+
+| Folder | Purpose |
+| --- | --- |
+| `.agents/` | Repo-local AI skills and references for future agent work, especially Supabase guidance. |
+| `.github/workflows/` | Operational automation, currently focused on manual Prisma migration runs. |
+| `Guide-Files/` | Human reference documents and helper notes kept alongside the repo. |
+| `prisma/` | Schema source for Postgres persistence. |
+| `scripts/` | Standalone Node scripts for env validation and guarded DB operations. |
+| `src/app/` | App Router pages, layout, CSS, and API routes. |
+| `src/components/` | Reusable UI and feature components. |
+| `src/lib/` | Business logic, provider adapters, manifests, filters, env handling, AI helpers, and Supabase helpers. |
+| `src/stores/` | Lightweight Zustand state stores. |
+| `src/types/` | Shared TypeScript contracts for platforms, manifests, filters, and videos. |
+
+## File-by-File Hints
+
+**How to read this section**
+
+- This section focuses on the important project files and runtime entry points.
+- It does not enumerate every leaf reference markdown file under `.agents/skills/**/references`, because those are imported reference notes rather than app runtime code.
+
+### Root and repo-level docs
+
+| Path | What it contains | Why it matters |
+| --- | --- | --- |
+| `.env.example` | Documented env contract with placeholders only. | Main source of truth for required and optional env keys. |
+| `.gitignore` | Ignore rules for env files, build output, and local artifacts. | Confirms secret files and build output should stay out of git. |
+| `package.json` | App metadata, scripts, and dependency declarations. | Fastest way to understand stack, commands, and high-level tooling. |
+| `package-lock.json` | Locked dependency graph. | Useful when exact installed versions matter. |
+| `README.md` | Operational documentation for setup, envs, Supabase, Prisma, and deployment. | Best human-facing summary of the current app contract. |
+| `PROJECT_LEDGER.md` | Historical implementation ledger. | Explains why recent hardening work happened and what changed. |
+| `dailymotion_discovery_ledger.md` | This project-wide reference ledger. | Intended onboarding document for future developers and AI agents. |
+| `next.config.ts` | Minimal Next.js config with `reactStrictMode: true`. | Confirms low customization at framework config level. |
+| `next-env.d.ts` | Next.js generated type references. | Standard TS glue file; should not be edited manually. |
+| `postcss.config.mjs` | Tailwind PostCSS plugin config. | Enables Tailwind v4 styling pipeline. |
+| `tsconfig.json` | TypeScript compiler settings and path alias config. | Confirms strict mode, bundler module resolution, and `@/*` alias usage. |
+| `prisma.config.ts` | Prisma CLI config and datasource resolution logic. | Critical for enforcing the `DATABASE_URL`-only Session Pooler workflow. |
+| `skills-lock.json` | Lock file for repo-local skills metadata. | Tracks AI skill source and hashes for local agent tooling. |
+
+### Repo-local agent and guide files
+
+| Path | What it contains | Why it matters |
+| --- | --- | --- |
+| `.agents/skills/supabase/SKILL.md` | Repo-local Supabase agent skill entrypoint. | Tells future AI agents how to approach Supabase work in this repo. |
+| `.agents/skills/supabase-postgres-best-practices/SKILL.md` | Supabase Postgres performance best-practices skill. | Helpful for future schema or query tuning work. |
+| `Guide-Files/ai_video_discovery_platform_2026_phase_guide.md` | Rebuild-from-scratch style planning guide. | Historical planning reference, not the live app contract. |
+| `Guide-Files/git_github_arabic_commands_guide.md` | Git/GitHub command guide in Arabic. | Developer reference only; not part of runtime. |
+| `Guide-Files/env_backup.txt` | A backup-oriented env-related file by name. | Treat carefully and review for secret hygiene before sharing the repo. |
+
+### Scripts and workflow
+
+| Path | What it contains | Why it matters |
+| --- | --- | --- |
+| `scripts/load-project-env.mjs` | Shared dotenv loader with env file priority and unsupported-file warnings. | Central helper for all standalone script env behavior. |
+| `scripts/app-validate-env.mjs` | Build-time app env validation. | Stops `next build` early when required app env is missing. |
+| `scripts/db-validate-env.mjs` | Sanitized DB env validation. | Validates DB URLs safely without printing secrets. |
+| `scripts/db-apply.mjs` | Guarded migration apply flow. | Enforces confirmation and safe command ordering for DB changes. |
+| `.github/workflows/db-migrate.yml` | Manual-only migration workflow. | Production-oriented migration path for GitHub Actions users. |
+
+### Prisma
+
+| Path | What it contains | Why it matters |
+| --- | --- | --- |
+| `prisma/schema.prisma` | Postgres schema models for sources, videos, manifests, jobs, and saved items. | Core data model for future persistence and migrations. |
+
+### App shell and pages
+
+| Path | What it contains | Why it matters |
+| --- | --- | --- |
+| `src/app/layout.tsx` | Root layout, metadata, global CSS import, and no-flash theme boot script. | Top-level UI and theme behavior starts here. |
+| `src/app/globals.css` | Global Tailwind import plus theme tokens and base styles. | The current design system lives here. |
+| `src/app/page.tsx` | Dashboard / home page. | Product entry surface and navigation hub. |
+| `src/app/channel-explorer/page.tsx` | Main interactive Channel Explorer page. | Most important product screen in the current MVP. |
+| `src/app/search/page.tsx` | Global search page shell. | Shows the intended future search workspace shape. |
+| `src/app/ai-search/page.tsx` | AI Search page shell. | Documents available AI-assisted discovery directions. |
+| `src/app/saved/page.tsx` | Saved Library page shell. | Placeholder for future collection and saved-video work. |
+| `src/app/channels/page.tsx` | Redirect to `/channel-explorer`. | Legacy or convenience route mapping. |
+| `src/proxy.ts` | Next.js 16 proxy entrypoint for Supabase session refresh. | Replaces the older middleware naming pattern. |
+
+### API routes
+
+| Path | What it contains | Why it matters |
+| --- | --- | --- |
+| `src/app/api/dailymotion/channel/analyze/route.ts` | Channel input analyzer route. | First step for turning user input into provider API paths. |
+| `src/app/api/dailymotion/channel/fetch/route.ts` | First-page channel fetch route. | Smallest safe manifest fetch path. |
+| `src/app/api/dailymotion/channel/fetch-all/route.ts` | Multi-page channel fetch route. | Most complex fetch logic and partial-manifest behavior. |
+| `src/app/api/dailymotion/channel/stop-fetch/route.ts` | Stop-fetch info route. | Documents that cancellation is client-side today. |
+| `src/app/api/dailymotion/search/route.ts` | Dailymotion search route. | Search manifest foundation for future search UI. |
+| `src/app/api/manifests/channel/filter/route.ts` | Server-side filter route. | Reusable filtering endpoint for supplied items. |
+| `src/app/api/ai/parse-query/route.ts` | AI query-parsing route. | Future bridge between natural language and structured filters. |
+| `src/app/api/ai/filter-helper/route.ts` | AI filter suggestion route. | Supports manifest-aware filter guidance. |
+| `src/app/api/ai/summarize-manifest/route.ts` | AI manifest summary route. | Supports metadata summarization while staying grounded. |
+
+### Components
+
+| Path | What it contains | Why it matters |
+| --- | --- | --- |
+| `src/components/layout/app-shell.tsx` | Header, nav, and page container. | Shared chrome for all visible pages. |
+| `src/components/layout/theme-toggle.tsx` | Light/dark icon toggle. | Persists user theme preference to `localStorage`. |
+| `src/components/ai/ai-helper-panel.tsx` | Small AI capability explainer card. | Keeps AI helper scope visible in the explorer workflow. |
+| `src/components/channel-explorer/channel-input-panel.tsx` | Analyze/fetch control panel. | Main action surface for entering Dailymotion inputs. |
+| `src/components/channel-explorer/channel-fetch-progress.tsx` | Fetch progress stats card. | Summarizes fetch state, counts, and API total. |
+| `src/components/channel-explorer/channel-manifest-summary.tsx` | Current manifest summary card. | Provides quick context about the active manifest. |
+| `src/components/filters/advanced-filter-panel.tsx` | Filter form UI. | Exposes the full filter contract to the user. |
+| `src/components/filters/active-filter-chips.tsx` | Active filter chips. | Makes the current filter state visible at a glance. |
+| `src/components/video/video-card.tsx` | Result card with thumbnail, metadata, and open action. | Core result presentation component. |
+| `src/components/video/video-hover-preview.tsx` | Iframe hover preview. | Adds lightweight live preview behavior. |
+| `src/components/video/video-results-grid.tsx` | Responsive card grid plus empty state. | Shared result rendering container. |
+| `src/components/ui/button.tsx` | Token-based button primitive. | Keeps shared interaction styling consistent. |
+| `src/components/ui/card.tsx` | Token-based card primitive. | Shared framed surface across the app. |
+| `src/components/ui/input.tsx` | Token-based input primitive. | Shared text and number input styling. |
+
+### Library code
+
+| Path | What it contains | Why it matters |
+| --- | --- | --- |
+| `src/lib/config/public-env.ts` | Public env parsing with build-phase fallback stubs. | Keeps browser-safe env separate from server-only env logic. |
+| `src/lib/config/env.ts` | Server env parsing, DB URL validation, optional flags, and fetch safety config. | Central runtime config module. |
+| `src/lib/ai/gemini-client.ts` | Gemini client wrapper and controlled route errors. | Single place for AI provider setup and failure normalization. |
+| `src/lib/ai/ai-schemas.ts` | Lightweight filter-shape validation helpers. | Helps constrain AI-proposed filters. |
+| `src/lib/ai/prompts.ts` | Shared AI safety prompt. | Encodes the "no invented videos" policy in one place. |
+| `src/lib/platforms/dailymotion/dailymotion-url-analyzer.ts` | Input parsing for Dailymotion source types. | Converts flexible user input into API-ready source descriptors. |
+| `src/lib/platforms/dailymotion/dailymotion-client.ts` | Dailymotion fetch wrapper with timeout and safe error mapping. | Core provider adapter for both search and channel fetches. |
+| `src/lib/platforms/dailymotion/dailymotion-normalize.ts` | Raw-to-normalized metadata transform. | Prevents provider-specific data shapes from leaking into the UI. |
+| `src/lib/platforms/dailymotion/dailymotion-channel-service.ts` | First-page channel fetch service plus shared fetch limits. | Provider-aware fetch service for the main explorer flow. |
+| `src/lib/manifests/channel-manifest.ts` | Channel manifest construction and dedupe helpers. | Central manifest creation logic for explorer results. |
+| `src/lib/manifests/temporary-search-manifest.ts` | Search manifest construction helper. | Keeps search results aligned with the manifest model. |
+| `src/lib/filters/apply-advanced-video-filters.ts` | Actual filter and sort engine. | One of the most important behavior modules in the repo. |
+| `src/lib/filters/filter-types.ts` | Default advanced filter state. | Defines initial filter values consistently. |
+| `src/lib/supabase/client.ts` | Browser Supabase client helper. | Foundation for future authenticated browser flows. |
+| `src/lib/supabase/server.ts` | Server Supabase client helper. | Foundation for future server-side authenticated flows. |
+| `src/lib/supabase/middleware.ts` | Supabase session refresh helper used by `src/proxy.ts`. | Keeps session cookies synchronized in request flow. |
+| `src/lib/utils/cn.ts` | Class merge utility. | Shared Tailwind class composition helper. |
+| `src/lib/utils/zero-safe-number.ts` | Numeric parsing helpers that preserve valid zero values. | Important for correct metadata filtering and display. |
+
+### Types and stores
+
+| Path | What it contains | Why it matters |
+| --- | --- | --- |
+| `src/types/platform.ts` | Platform union type. | Current adapter space is intentionally small and explicit. |
+| `src/types/video.ts` | Normalized video metadata contract. | Main type shared across fetch, filter, and UI layers. |
+| `src/types/manifest.ts` | Channel and search manifest contracts. | Keeps manifest structure explicit across routes and UI. |
+| `src/types/filters.ts` | Advanced filter contract and sort options. | Shared type between UI and filter engine. |
+| `src/stores/channel-manifest-store.ts` | Zustand store for a channel manifest. | Available state foundation, even though the current page uses local state. |
+| `src/stores/search-store.ts` | Zustand store for search manifests. | Future search-state foundation. |
+
+## Safety and Security
+
+- Server-only secrets must stay server-only. Never move DB URLs, Gemini keys, or service-role keys into `NEXT_PUBLIC_*`.
+- The platform is metadata-only. Do not add downloading, rehosting, or stream scraping features.
+- AI routes are constrained by a safety prompt that forbids inventing videos, IDs, URLs, or counts.
+- DB scripts print sanitized connection host/protocol details only, not raw secrets.
+- Partial manifests are preserved on fetch-all failures instead of being thrown away.
+- `zeroSafeNumber` ensures valid `0` values are not mistaken for missing metadata.
+- Proxy refreshes Supabase session cookies but is not, by itself, a full authorization strategy.
+- Real `.env` data was intentionally omitted from this ledger.
+
+## Known Limitations
+
+- The current real product surface is mostly `/channel-explorer`.
+- `/search`, `/ai-search`, and `/saved` are still mostly placeholder UIs.
+- The Prisma/Supabase persistence foundation exists, but the current explorer flow still returns in-memory manifests rather than persisting them.
+- The app schema expects committed migrations under `prisma/migrations`, but no migrations directory is committed in the current repo snapshot.
+- Current Prisma status against the configured Session Pooler is blocked by connection/authentication diagnostics (`P1001`/`P1000`) before migration history can be compared.
+- `stop-fetch` is informational only; actual stop behavior is browser-side `AbortController`, not server-side job cancellation.
+- AI routes currently return plain text, not strongly structured end-to-end JSON workflows.
+- No visible sign-in, sign-up, or full account management UI exists in the scanned app pages.
+- No visible runtime Prisma client usage was found in `src`, so persistence is not yet wired into the main product loop.
+- `framer-motion` is installed but not visibly used in the scanned source files.
+- Real database status and apply behavior still require user action with valid credentials and, likely, URL-encoded DB password characters if reserved characters are present.
+
+## Future Roadmap
+
+- Add a YouTube adapter with the same normalized metadata and manifest model.
+- Expand into multi-platform adapters beyond Dailymotion.
+- Persist manifests, fetch jobs, and saved library data in Supabase/Postgres.
+- Enable `pgvector` and semantic search once embeddings are introduced.
+- Add authentication and user-account flows on top of the existing Supabase SSR foundation.
+- Expand saved collections and library workflows beyond the current placeholder page.
+- Add AI indexing, structured AI outputs, and retrieval-friendly metadata pipelines.
+- Add pagination or virtualization for very large manifests and result sets.
+- Add production monitoring, observability, and operational dashboards for fetch behavior and AI route health.
+
+## Agent Instructions
+
+- Read this ledger first before making structural changes.
+- Do not rebuild the app from scratch unless a human explicitly requests that approach.
+- Prefer minimal, surgical edits that respect the current manifest-first architecture.
+- Keep secrets server-only and do not print them in logs or docs.
+- Treat `DATABASE_URL` as the canonical DB variable.
+- Do not reintroduce `DIRECT_URL` as an active env variable, override, fallback, or duplicate database URL.
+- Preserve separation between Search Manifest, Channel Manifest, Saved Library, and AI scopes.
+- Do not turn this product into a downloader, scraper, or rehosting tool.
+- Update this ledger and `PROJECT_LEDGER.md` after meaningful architecture, workflow, or env-contract changes.
+- Check `README.md`, `PROJECT_LEDGER.md`, and repo-local `.agents/skills/` guidance when working on Supabase, Prisma, or operational flows.

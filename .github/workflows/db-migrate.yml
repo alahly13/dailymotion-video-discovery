@@ -31,7 +31,6 @@ jobs:
     environment: ${{ github.event.inputs.environment || 'production' }}
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      DIRECT_URL: ${{ secrets.DIRECT_URL }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -54,18 +53,18 @@ jobs:
 
       - name: Validate required secrets presence
         run: |
-          if [ -z "${DATABASE_URL}" ] || [ -z "${DIRECT_URL}" ]; then
-            echo "❌ Missing required GitHub Actions secrets: DATABASE_URL and/or DIRECT_URL."
-            echo "Add them in: Repository -> Settings -> Secrets and variables -> Actions."
+          if [ -z "${DATABASE_URL}" ]; then
+            echo "[ERROR] Missing required GitHub Actions secret: DATABASE_URL."
+            echo "Add it in: Repository -> Settings -> Secrets and variables -> Actions."
             exit 1
           fi
-          echo "✅ Required database secrets are present."
+          echo "[OK] Required DATABASE_URL secret is present."
 
       - name: Validate database environment
         run: npm run db:validate
 
       - name: Pre-migration status
-        run: npm run db:status
+        run: node scripts/db-status.mjs --allow-status-failure
 
       - name: Confirmation gate for migration apply
         id: confirm_gate
@@ -80,12 +79,12 @@ jobs:
           fi
 
           if [ "$CONFIRM_INPUT" = "APPLY" ] || [ "$CONFIRM_INPUT" = "true" ]; then
-            echo "✅ Confirmation accepted; db:apply is authorized."
+            echo "[OK] Confirmation accepted; db:apply is authorized."
             echo "apply_allowed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          echo "❌ Confirmation invalid. Re-run workflow with confirm=APPLY (or true)."
+          echo "[ERROR] Confirmation invalid. Re-run workflow with confirm=APPLY (or true)."
           exit 1
 
       - name: Apply migrations

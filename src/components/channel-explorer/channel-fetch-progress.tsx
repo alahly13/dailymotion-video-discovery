@@ -1,5 +1,21 @@
 import { Card } from "@/components/ui/card";
 
 export function ChannelFetchProgress({ status, pagesFetched, count, total }: { status: string; pagesFetched: number; count: number; total: number | null }) {
-  return <Card className="grid gap-4 sm:grid-cols-4"><div><p className="text-xs uppercase text-slate-500">Status</p><p className="font-bold">{status}</p></div><div><p className="text-xs uppercase text-slate-500">Pages fetched</p><p className="font-bold">{pagesFetched}</p></div><div><p className="text-xs uppercase text-slate-500">Videos collected</p><p className="font-bold">{count}</p></div><div><p className="text-xs uppercase text-slate-500">API total</p><p className="font-bold">{total ?? "Unknown"}</p></div></Card>;
+  const stats = [
+    ["Status", status],
+    ["Pages fetched", pagesFetched],
+    ["Videos collected", count],
+    ["API total", total ?? "Unknown"],
+  ];
+
+  return (
+    <Card className="grid gap-4 sm:grid-cols-4">
+      {stats.map(([label, value]) => (
+        <div key={label}>
+          <p className="text-xs font-semibold uppercase text-[var(--muted-foreground)]">{label}</p>
+          <p className="mt-1 text-lg font-bold">{value}</p>
+        </div>
+      ))}
+    </Card>
+  );
 }

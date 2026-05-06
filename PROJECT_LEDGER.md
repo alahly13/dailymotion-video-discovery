@@ -1,5 +1,55 @@
 # Project Ledger
 
+Current database policy is defined by the newest entry below. Older entries are retained as historical record and may describe superseded `DIRECT_URL` behavior that is no longer active.
+
+## 2026-05-06 - Prisma schema-engine status diagnostics and migration-history guard
+
+- Diagnosed the remaining `npm run db:status` failure after the `DATABASE_URL`-only cutover. Raw `npx prisma migrate status` still targets the Supabase Session Pooler host from `DATABASE_URL`, but Prisma returns only `Error: Schema engine error:`.
+- Added the safer status wrapper as the active `db:status` command. `scripts/db-status.mjs` now validates `DATABASE_URL`, warns separately when `prisma/migrations` is missing, runs a non-mutating Prisma `SELECT 1` connectivity preflight, retries one transient `P1001`, and reports concrete Prisma errors without printing secrets.
+- Current live diagnostic result: the wrapper surfaced a transient `P1001` reachability failure followed by `P1000` authentication failure against the Session Pooler. This means the bare schema-engine error is masking an environment-specific connection/credential problem, not a `DIRECT_URL` regression and not a Prisma schema syntax problem.
+- Confirmed `prisma/migrations` is still absent. This is not the current connectivity failure, but it remains a separate migration deploy blocker. `db:apply` now fails closed before `migrate deploy` when no committed `migration.sql` files exist.
+- Updated the manual GitHub Actions workflow so pre-migration status can continue only for pending/uninitialized migration status after connectivity succeeds; connection failures still fail closed.
+- Pinned `prisma` and `@prisma/client` to the verified aligned `7.8.0` pair in `package.json` and `package-lock.json`.
+- Updated `.env.example` and README to document that the Supabase Session Pooler URL on port `5432` does not require `pgbouncer=true` for this workflow unless official troubleshooting for the exact pooler mode says otherwise.
+- Added a repo-specific Supabase skill override preserving Prisma as the canonical migration workflow and prohibiting `DIRECT_URL`, direct hosts, `db push`, and `migrate reset` as production repair paths.
+- Redacted the secret-looking `Guide-Files/env_backup.txt` database placeholders and added it to `.gitignore` so local env backups are not committed.
+- Verification: script syntax checks passed; `npm run db:validate` passed; `npx prisma validate` passed; `npx prisma generate` passed; raw `npx prisma migrate status` still returned the bare schema-engine error; `npm run db:status` now reports the concrete preflight blocker and exits 1; `npm run typecheck` passed; `npm run build` passed.
+- Safety: `DIRECT_URL` was not restored; no Supabase direct host was introduced; no migration was created or applied; `db:apply` was not run; no destructive Prisma command was run; no secrets were intentionally printed.
+
+## 2026-05-06 - DATABASE_URL-only Prisma and Supabase Session Pooler workflow
+
+- Removed `DIRECT_URL` from the active Prisma/database workflow. Prisma CLI, migration status, migration deploy, client generation, app validation, runtime DB config, and GitHub Actions now use `DATABASE_URL` only.
+- Updated `prisma.config.ts` so datasource resolution is always `env("DATABASE_URL")`; the canonical value should be the Supabase Session Pooler URL.
+- Updated DB scripts to validate and print sanitized diagnostics for `DATABASE_URL` only, warn when `DATABASE_URL` looks like a Supabase direct host, and avoid printing usernames, passwords, query strings, or raw URLs.
+- Updated `.env.example`, `README.md`, `.github/workflows/db-migrate.yml`, `src/lib/config/env.ts`, and `scripts/app-validate-env.mjs` to remove active direct-URL support and document the one-variable policy.
+- Updated `dailymotion_discovery_ledger.md` with the decision, reason, files changed, verification plan, risks, and future-agent instructions.
+- Verification: `npm run db:validate` passed with `DATABASE_URL` only; `npm run db:status` used the Session Pooler host from `DATABASE_URL` and did not attempt the Supabase direct host, but Prisma returned a bare schema-engine error; `npm run typecheck` passed; `npm run build` passed.
+- Safety: no destructive Prisma commands were added or run; `db:apply` was not run; no secrets were copied into documentation.
+
+## 2026-05-06 - Full dotenv, DATABASE_URL fallback, migrations, and UI hardening
+
+- Added explicit `dotenv` loading for standalone Node/Prisma paths with file priority `.env.local`, `.env`, `.env.development`, `.env.production`, while preserving real `process.env` precedence.
+- Updated DB/app validation so `DATABASE_URL` is the only required database variable; `DIRECT_URL` is optional, may equal `DATABASE_URL`, and falls back to `DATABASE_URL` when missing/blank/placeholder.
+- Updated `prisma.config.ts` to load env with `dotenv` and keep Prisma CLI/migration resolution as valid `DIRECT_URL` first, `DATABASE_URL` fallback second.
+- Updated `scripts/db-apply.mjs` to print sanitized connection mode, require `CONFIRM_DB_APPLY=true` for Supabase/pooler/production-like targets, run pre/post migration status, deploy, and generate without destructive commands.
+- Split public Supabase env into `src/lib/config/public-env.ts` so middleware/proxy and browser helpers do not import server DB/Gemini validation.
+- Updated GitHub Actions migration workflow so only `DATABASE_URL` is required and `DIRECT_URL` is optional.
+- Installed `dotenv` and updated `package.json`/`package-lock.json`.
+- Refreshed the UI with smaller-radius shared tokens, premium light/dark surfaces, no radial decorative backgrounds, icon theme toggle, cleaner app shell, improved result grids, filters, and zero-safe video cards.
+- Updated `.env.example`, `README.md`, and `.gitignore` for Session Pooler-first Supabase free-plan guidance, optional direct URL, secret handling, Vercel/GitHub env setup, and migration commands.
+- Verification: `node -c` on scripts passed; temp `.env.local` with only `DATABASE_URL` passed; temp `.env.local` with both DB vars passed; `npm run db:validate` passed with `DATABASE_URL` and placeholder `DIRECT_URL` fallback; `npm run env:validate` passed with safe non-secret env; `npm run typecheck` passed; `npm run build` passed; dev server routes `/`, `/channel-explorer`, `/search`, `/ai-search`, and `/saved` returned HTTP 200.
+- Limitations: real `db:status`/`db:apply` were not run against the user's database; `db:status` was attempted only with a safe placeholder pooler host and failed before a real connection. The current local `.env.local` appears to contain reserved password characters that need URL encoding before real Prisma connectivity can be validated.
+
+
+## 2026-05-06 — Vercel 2026 env/bootstrap hardening
+
+- Added `scripts/load-project-env.mjs` using `@next/env` so standalone Node/Prisma scripts follow Next.js root `.env*` loading instead of requiring manual shell export only.
+- Added `scripts/app-validate-env.mjs` plus `npm run env:validate`, and wired `npm run build` to fail early when Vercel-required env keys are missing or malformed.
+- Updated `prisma.config.ts` to use `@next/env` instead of `dotenv/config`, keeping Prisma CLI aligned with `.env.local` and Vercel env pulls.
+- Renamed `src/middleware.ts` to `src/proxy.ts` to remove the Next.js 16 middleware deprecation warning during production builds.
+- Added `.local.env` and `src/.local.env` guardrails/documentation because they are not supported Next.js/Vercel env file names or locations.
+- Verification target in this environment: `npm run typecheck`, `npm run env:validate`, `npm run db:validate`, and `npm run build` with safe placeholder env values.
+
 
 ## 2026-05-06 — Prisma CLI DIRECT_URL precedence verification
 

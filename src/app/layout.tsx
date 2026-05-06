@@ -11,9 +11,16 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: `(() => { const stored = localStorage.getItem('theme'); const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches; const next = stored === 'light' || stored === 'dark' ? stored : (prefersDark ? 'dark' : 'light'); if (next === 'dark') document.documentElement.classList.add('dark'); })();` }} />
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "(() => { try { const stored = localStorage.getItem('theme'); const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches; const next = stored === 'light' || stored === 'dark' ? stored : (prefersDark ? 'dark' : 'light'); document.documentElement.classList.toggle('dark', next === 'dark'); document.documentElement.dataset.theme = next; } catch {} })();",
+          }}
+        />
       </head>
-      <body><AppShell>{children}</AppShell></body>
+      <body>
+        <AppShell>{children}</AppShell>
+      </body>
     </html>
   );
 }

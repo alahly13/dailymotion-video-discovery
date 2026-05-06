@@ -2,16 +2,7 @@
 
 Next.js App Router application for public Dailymotion video metadata discovery and research.
 
-## 2026 upgrade highlights
-
-- Supabase SSR client helpers for browser/server/middleware session handling.
-- Prisma datasource migrated from SQLite MVP to Supabase PostgreSQL (`DATABASE_URL` + `DIRECT_URL`).
-- New durable relational schema for canonical videos, sources, manifests, manifest items, fetch jobs, and user saved videos.
-- Typed environment validation with Zod and fail-fast env parsing.
-
-## Safety scope
-
-This platform is **not** a downloader. It does not download/rehost videos, scrape private streams, or bypass platform restrictions.
+This platform is not a downloader. It does not download, rehost, scrape private streams, or bypass platform restrictions.
 
 ## Setup
 
@@ -22,147 +13,140 @@ npm run db:generate
 npm run dev
 ```
 
-## Online database migration workflow
+Use a root `.env.local` for local and online terminals. The scripts load env files with `dotenv` in this priority: `.env.local`, `.env`, `.env.development`, `.env.production`. Real `process.env` values from Vercel, GitHub Actions, Codespaces, or Codex take priority over file values.
 
-This project uses committed Prisma migration files plus `prisma migrate deploy` for safe, predictable Supabase/Postgres schema updates.
+## Required Env
 
-### NPM migration commands
+Public/browser-safe:
 
-- `npm run db:validate` — validates `DATABASE_URL` and `DIRECT_URL` and prints sanitized metadata only.
-- `npm run db:status` — shows Prisma migration status.
-- `npm run db:apply` — runs preflight validation, shows sanitized target summary, runs `prisma migrate status`, then `prisma migrate deploy`, then `prisma generate`.
-- `npm run db:migrate:deploy` — direct Prisma deploy command.
-- `npm run db:create-migration` — developer-only command to create migration files (`prisma migrate dev --create-only`).
-- `npm run db:studio` — opens Prisma Studio (if environment supports UI access).
+- `NEXT_PUBLIC_APP_URL`
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
 
-### Required Supabase connection strings
+Server-only:
 
-- `DATABASE_URL`: pooled/runtime connection used by the running app.
-- `DIRECT_URL`: direct connection for Prisma migration and direct operations.
-- Get both in **Supabase Dashboard → Connect**.
-- Configure both as secrets/environment variables in Codespaces, GitHub Actions, and Vercel.
+- `DATABASE_URL`: required. Use the Supabase Session Pooler connection string.
+- `GEMINI_API_KEY`: required for AI routes.
 
-### Prisma 7.8+ datasource configuration
+Never expose `DATABASE_URL`, `GEMINI_API_KEY`, or service role keys as `NEXT_PUBLIC_*`. Do not create `NEXT_PUBLIC_DATABASE_URL`.
 
-- Prisma CLI 7.8+ reads datasource `url`/`directUrl` from `prisma.config.ts` (not from `schema.prisma`).
-- In this repo, Prisma CLI commands (`migrate status`/`deploy`/`dev`) resolve datasource URL as `DIRECT_URL` first, with `DATABASE_URL` fallback when `DIRECT_URL` is unset.
-- This repo keeps `provider = "postgresql"` in `prisma/schema.prisma` and resolves connection strings from env via `prisma.config.ts`.
-- `DATABASE_URL` and `DIRECT_URL` remain required, server-only, and sanitized by `npm run db:validate`.
-- For Supabase Session Pooler workflows in Vercel/Codespaces, `DIRECT_URL` may equal `DATABASE_URL`.
+## Supabase Connection Strategy
 
-### Difference between `db:apply` and `db:create-migration`
+For this free-plan, IPv4-limited workflow, use Supabase Session Pooler for `DATABASE_URL`:
 
-- `db:create-migration` creates new migration files during development and review.
-- `db:apply` applies already-committed migration files to a target database.
-- Production should use `db:apply`/`prisma migrate deploy`, not `db push`.
+```env
+DATABASE_URL="postgresql://postgres.<project-ref>:<percent-encoded-password>@aws-0-<region>.pooler.supabase.com:5432/postgres"
+```
 
-## How to run migrations from GitHub Codespaces
+Use one database variable only: `DATABASE_URL`. Copy the Supabase Session Pooler URI from the Supabase dashboard Connect panel. This project does not use `DIRECT_URL`; do not configure it as a migration override, fallback, or duplicate URL.
 
-1. Open the repository on GitHub.
-2. Click **Code**.
-3. Choose **Open with Codespaces**.
-4. Create or select a Codespace.
-5. Add Codespaces secrets for:
-   - `DATABASE_URL`
-   - `DIRECT_URL`
-   - `NEXT_PUBLIC_SUPABASE_URL`
-   - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
-   - `GEMINI_API_KEY`
-   - and other required values from `.env.example`
-6. Run `npm install`.
-7. Run `npm run db:validate`.
-8. Run `npm run db:status`.
-9. Run `CONFIRM_DB_APPLY=true npm run db:apply`.
-10. Run `npm run typecheck` (if dependencies are installed).
-11. Commit generated migration files if you created new migrations.
+Supabase direct database hosts like `db.<project-ref>.supabase.co` can require IPv6 or a paid IPv4 add-on. In IPv4-limited Windows terminals, online agents, GitHub Actions, Codespaces, and many deployment environments, a direct host can fail with Prisma `P1001`. The Session Pooler host shape is:
 
-## How to run migrations from GitHub Actions
+```text
+aws-0-<region>.pooler.supabase.com
+```
 
-A manual workflow is available at `.github/workflows/db-migrate.yml`.
+If your Supabase password contains reserved URL characters such as `#`, `@`, `?`, `/`, or `$`, percent-encode those characters before pasting the connection string.
 
-- Workflow name: **Apply database migrations**
-- Trigger: `workflow_dispatch` only (manual, never on push/pull_request/schedule)
-- Configure secrets in: **GitHub repo → Settings → Secrets and variables → Actions**
-- Required repository secrets:
-  - `DATABASE_URL`
-  - `DIRECT_URL`
-- For IPv4-first online workflows, both `DATABASE_URL` and `DIRECT_URL` may use the Supabase Session Pooler URL.
+Windows PowerShell and online terminals should use a root `.env.local`:
 
-### Manual run steps
+```powershell
+Copy-Item .env.example .env.local
+npm run db:validate
+npm run db:status
+```
 
-1. Open **GitHub repo → Actions → Apply database migrations**.
-2. Click **Run workflow**.
-3. Select inputs:
-   - `environment`: `production`, `preview`, or `staging` (audit label only).
-   - `run_apply`:
-     - `true` = run pre-checks + apply migrations.
-     - `false` = status-only mode (pre/post status checks without apply).
-   - `confirm`: must be `APPLY` (or `true`) when `run_apply=true`.
-4. Run workflow.
+## Prisma And Migrations
 
-### Workflow safety sequence
+Prisma 7 reads connection settings from `prisma.config.ts`; `prisma/schema.prisma` keeps only `provider = "postgresql"`.
 
-1. `npm run db:validate`
-2. `npm run db:status` (pre-check, fail-closed)
-3. Manual confirmation gate (for apply mode)
-4. `CONFIRM_DB_APPLY=true npm run db:apply` (internally runs `prisma migrate deploy`)
-5. `npm run db:status` (post-check)
-6. `npm run db:generate` (status-only mode, to verify Prisma CLI/tooling path)
+Connection resolution:
 
-### Important deployment rule
+- Runtime server DB access uses `DATABASE_URL`.
+- Prisma CLI, `db:status`, `db:apply`, migration deploys, client generation, and Prisma Studio use `DATABASE_URL`.
+- The Direct Connection URI from Supabase is intentionally not part of this project's active workflow.
 
-- Do **not** run production migrations from Vercel build hooks. Use this manual GitHub Actions workflow only.
+Commands:
 
-## Production safety rules
+- `npm run db:validate`: loads dotenv, requires only `DATABASE_URL`, and prints sanitized host metadata only.
+- `npm run db:status`: runs a sanitized status wrapper that validates env, checks `SELECT 1` connectivity, then runs `prisma migrate status`.
+- `npm run db:apply`: runs validation, pre-status, `prisma migrate deploy`, `prisma generate`, and post-status.
+- `npm run db:migrate:deploy`: direct Prisma deploy command.
+- `npm run db:create-migration`: developer-only migration creation command.
+- `npm run db:generate`: generates Prisma Client.
+- `npm run db:studio`: opens Prisma Studio.
 
-- Never run `prisma migrate reset` on production.
-- Never drop tables or auto-delete data via migration helper scripts.
-- Never print or paste raw `DATABASE_URL`/`DIRECT_URL` in logs, docs, or ledgers.
-- `db:apply` refuses to run for production-like targets unless `CONFIRM_DB_APPLY=true` is set.
-- Do not auto-run production migrations on every push unless explicitly approved.
+`npm run db:apply` refuses Supabase, pooler, production-like, and Vercel production targets unless `CONFIRM_DB_APPLY=true` is set.
 
-## Troubleshooting
+### Migration Status Diagnostics
 
-- **`npm install` blocked/fails**: verify registry/network access in Codespaces or CI and retry.
-- **Missing env vars**: run `npm run db:validate`; ensure `DATABASE_URL` and `DIRECT_URL` are set as secrets.
-- **Database connection errors**: verify Supabase host, credentials, SSL mode, and network rules from Dashboard → Connect.
-- **Migration conflicts**: run `npm run db:status`, review committed `prisma/migrations`, resolve drift before deploying.
+`npm run db:status` is intentionally wrapped by `scripts/db-status.mjs` instead of calling Prisma directly. Prisma 7 can return a bare `Schema engine error:` from `prisma migrate status`; the wrapper first runs a non-mutating `SELECT 1` through Prisma so authentication, reachability, and URL-format failures are reported with concrete Prisma error codes such as `P1000` or `P1001`.
 
-## Environment and fallback behavior
+For the Supabase Session Pooler URL on port `5432`, the current Supabase Prisma guide does not require `pgbouncer=true`. Keep the copied Session Pooler URL as the `DATABASE_URL` value unless official Supabase or Prisma troubleshooting for your exact pooler mode says to add a query parameter.
 
-- `DAILYMOTION_API_KEY` is optional. Public Dailymotion metadata routes run without it where endpoints allow anonymous access.
-- Required envs fail fast: `DATABASE_URL`, `DIRECT_URL`, `GEMINI_API_KEY`, `NEXT_PUBLIC_APP_URL`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`.
-- Optional envs never block startup; they only limit related features.
-- Dailymotion API failures return typed safe responses (`rate_limited`, `network_error`, `invalid_response`, `unauthorized`, `unavailable`) and preserve partial manifest data.
-- Gemini failures are isolated to AI routes and return controlled `ok: false` payloads.
-- Supabase service role key is optional/server-only and should only be used for privileged flows.
+### Missing Migration History
 
+This repository currently needs a reviewed Prisma migration history before `db:apply` can deploy schema changes. `schema.prisma` alone is not enough for production/staging deploys; Prisma expects committed files under `prisma/migrations`.
 
-## Supabase connection strategy for Vercel/Codespaces
+Safe baseline path, without applying anything automatically:
 
-### Session Pooler vs Direct connection
+1. Fix `DATABASE_URL` until `npm run db:status` reaches the migration-status phase without authentication or connectivity errors.
+2. Inspect the real target database state and decide whether it is empty, already matches `schema.prisma`, or needs a custom baseline.
+   Review-only diff command after credentials are fixed:
+   ```bash
+   npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script --output prisma-baseline-review.sql
+   ```
+3. Create a reviewed baseline migration file with Prisma Migrate tooling, then commit the full `prisma/migrations` folder including `migration_lock.toml`.
+4. If the real database already matches the baseline, use `prisma migrate resolve --applied <migration_name>` only after explicit human confirmation for that database.
+5. If the database is empty and the baseline is approved, use the guarded `CONFIRM_DB_APPLY=true npm run db:apply` path.
 
-- **Session Pooler (`*.pooler.supabase.com`)**: best default for online IPv4-first environments (Vercel, GitHub Codespaces, GitHub Actions).
-- **Direct (`db.<project-ref>.supabase.co`)**: can require IPv6 support (or paid IPv4 add-on), so it may fail on IPv4-only networks.
+Production safety:
 
-### Recommended environment variable mapping
+- Do not run `prisma migrate reset`.
+- Do not drop tables through helper scripts.
+- Do not use `prisma db push` as the production apply path.
+- Do not print raw database URLs or passwords.
 
-- `DATABASE_URL` (server-only, required): use Supabase Session Pooler.
-- `DIRECT_URL` (server-only, required for Prisma migrations):
-  - use direct URL only when IPv6 works in your environment, or
-  - reuse the same Session Pooler value as `DATABASE_URL` when IPv6 direct connectivity is unavailable.
+## Vercel
 
-### Where to configure secrets
+Configure required variables in Project Settings -> Environment Variables. After changing env values, create a new deployment so the updated values are available to build and runtime.
 
-- **Vercel**: Project → Settings → Environment Variables
-  - Add `DATABASE_URL`, `DIRECT_URL`, and all other required keys from `.env.example`.
-- **GitHub Codespaces**: Repository/Account Codespaces Secrets
-  - Add `DATABASE_URL`, `DIRECT_URL`, and required app/API keys.
-- **GitHub Actions**: Repository → Settings → Secrets and variables → Actions
-  - Add `DATABASE_URL` and `DIRECT_URL` for `.github/workflows/db-migrate.yml` and any runtime workflows.
+Required Vercel database variable:
 
-### Security reminders
+- `DATABASE_URL`: Supabase Session Pooler URI.
 
-- Never commit real `.env` values.
-- Never expose `DATABASE_URL` or `DIRECT_URL` as `NEXT_PUBLIC_*`.
-- Migration/validation scripts in this repo print sanitized host metadata only (no passwords/full URLs).
+`npm run build` runs `npm run env:validate` first through `scripts/app-validate-env.mjs`. Vercel should provide real env values; placeholder build stubs in code are only a build-time guard and are not used for runtime DB access.
+
+## GitHub Actions
+
+The manual workflow is `.github/workflows/db-migrate.yml`.
+
+Required secret:
+
+- `DATABASE_URL`
+
+Manual migration flow:
+
+1. Open Actions -> Apply database migrations.
+2. Select `run_apply=true` to apply, or `false` for status-only mode.
+3. Use `confirm=APPLY` or `confirm=true` for apply mode.
+4. The workflow runs validation, status, guarded apply, post-status, and client generation.
+
+No secrets are printed by the workflow or database scripts.
+
+## Local Checks
+
+```bash
+npm run env:validate
+npm run db:validate
+npm run typecheck
+npm run build
+```
+
+`npm run db:status` requires real database access. `npm run db:apply` should only be run against the intended target with `CONFIRM_DB_APPLY=true`.
+
+## Optional Integrations
+
+- `DAILYMOTION_API_KEY` is optional. Public metadata routes run without it where Dailymotion endpoints allow anonymous access.
+- `SUPABASE_SERVICE_ROLE_KEY` is optional and server-only for privileged flows.
+- AI route failures return controlled unavailable payloads when Gemini is not configured or temporarily unavailable.

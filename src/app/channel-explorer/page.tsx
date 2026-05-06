@@ -43,7 +43,7 @@ export default function ChannelExplorerPage() {
   async function analyze() {
     try {
       const data = await runJson("/api/dailymotion/channel/analyze");
-      if (data?.analysis) setAnalysis(`${data.analysis.displayLabel} · ${data.analysis.sourceType}`);
+      if (data?.analysis) setAnalysis(`${data.analysis.displayLabel} - ${data.analysis.sourceType}`);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
       setError(err instanceof Error ? err.message : "Analyze failed.");
@@ -69,19 +69,21 @@ export default function ChannelExplorerPage() {
 
   return (
     <div className="space-y-8">
-      <section className="rounded-[2rem] border border-[var(--border)] bg-[var(--card)] p-8 shadow-sm backdrop-blur sm:p-10">
-        <p className="text-sm font-bold uppercase tracking-[0.25em] text-[var(--accent)]">Core MVP Feature</p>
-        <h1 className="mt-3 max-w-4xl text-4xl font-black tracking-tight sm:text-6xl">Fetch, manifest, filter, and preview public Dailymotion channel metadata.</h1>
-        <p className="mt-5 max-w-3xl text-lg text-[var(--muted-foreground)]">Fetch All safely paginates through public API results with deduplication, stop control, stale-response prevention, and a manifest-only filter pipeline.</p>
+      <section className="space-y-4">
+        <p className="text-sm font-bold uppercase text-[var(--accent)]">Channel Explorer</p>
+        <h1 className="max-w-4xl text-4xl font-black leading-tight sm:text-6xl">Build a manifest from public Dailymotion channel metadata.</h1>
+        <p className="max-w-3xl text-lg leading-8 text-[var(--muted-foreground)]">
+          Fetch All paginates through public API results with deduplication, stop control, stale-response prevention, and manifest-only filtering.
+        </p>
       </section>
       <ChannelInputPanel value={input} loading={loading} onChange={setInput} onAnalyze={analyze} onFetchFirst={() => fetchPath("/api/dailymotion/channel/fetch")} onFetchAll={() => fetchPath("/api/dailymotion/channel/fetch-all")} onStop={stopFetching} />
-      {analysis ? <div className="rounded-2xl bg-emerald-100 p-4 text-sm font-semibold text-emerald-900 dark:bg-emerald-950 dark:text-emerald-100">Detected: {analysis}</div> : null}
-      {error ? <div className="rounded-2xl bg-rose-100 p-4 text-sm font-semibold text-rose-900 dark:bg-rose-950 dark:text-rose-100">{error}</div> : null}
+      {analysis ? <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4 text-sm font-semibold text-[var(--success)]">Detected: {analysis}</div> : null}
+      {error ? <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4 text-sm font-semibold text-[var(--danger)]">{error}</div> : null}
       <ChannelFetchProgress status={loading ? "fetching" : manifest?.fetchStatus ?? "idle"} pagesFetched={manifest?.pagesFetched ?? 0} count={manifest?.items.length ?? 0} total={manifest?.totalKnownItems ?? null} />
       <ChannelManifestSummary manifest={manifest} />
       <AdvancedFilterPanel filters={filters} onChange={setFilters} onReset={() => setFilters(defaultAdvancedVideoFilters)} />
       <ActiveFilterChips filters={filters} />
-      <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-2xl font-black tracking-tight">Manifest Results</h2><p className="text-sm text-[var(--muted-foreground)]">{filteredItems.length} filtered / {manifest?.items.length ?? 0} original</p></div>
+      <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-2xl font-black">Manifest Results</h2><p className="text-sm text-[var(--muted-foreground)]">{filteredItems.length} filtered / {manifest?.items.length ?? 0} original</p></div>
       <VideoResultsGrid items={filteredItems} />
       <AiHelperPanel />
     </div>

@@ -1,5 +1,20 @@
 #!/usr/bin/env node
 
+import { loadProjectEnv } from "./load-project-env.mjs";
+
+loadProjectEnv();
+
+const PLACEHOLDER_PATTERNS = [
+  /<[^>]+>/,
+  /\[[^\]]+\]/,
+  /your-/i,
+  /placeholder/i,
+  /example/i,
+  /optional/i,
+  /leave empty/i,
+  /omit/i,
+];
+
 function parseUrl(raw) {
   try {
     return new URL(raw);
@@ -11,6 +26,11 @@ function parseUrl(raw) {
 function looksLikePostgres(raw) {
   const parsed = parseUrl(raw);
   return parsed ? ['postgres:', 'postgresql:'].includes(parsed.protocol) : false;
+}
+
+function isBlankOrPlaceholder(raw) {
+  const value = raw?.trim() || "";
+  return value.length === 0 || PLACEHOLDER_PATTERNS.some((pattern) => pattern.test(value));
 }
 
 function classifyHost(host = '') {
@@ -29,49 +49,50 @@ function sanitizeMeta(raw) {
     port: parsed.port || '(default)',
     database: parsed.pathname?.replace(/^\//, '') || '(unknown)',
     hostType: classifyHost(parsed.hostname || ''),
+    queryParams: parsed.searchParams.size > 0 ? 'present' : 'none',
   };
 }
 
 function validate() {
-  const required = ['DATABASE_URL', 'DIRECT_URL'];
-  const missing = required.filter((k) => !process.env[k] || !process.env[k].trim());
+  const databaseUrl = process.env.DATABASE_URL?.trim() || '';
 
-  if (missing.length > 0) {
-    console.error(`❌ Missing required environment variable(s): ${missing.join(', ')}`);
-    console.error('Set these in Vercel, GitHub Codespaces, GitHub Actions, or your local shell.');
+  if (isBlankOrPlaceholder(databaseUrl)) {
+    console.error('[ERROR] Missing required environment variable: DATABASE_URL');
+    console.error('Set DATABASE_URL in Vercel, GitHub Codespaces, GitHub Actions, your local shell, or a root .env.local file.');
     process.exit(1);
   }
 
-  const invalid = required.filter((k) => !looksLikePostgres(process.env[k]));
-  if (invalid.length > 0) {
-    console.error(`❌ Invalid PostgreSQL connection URL(s): ${invalid.join(', ')}`);
-    console.error('Expected postgres:// or postgresql:// URLs.');
+  if (!looksLikePostgres(databaseUrl)) {
+    console.error('[ERROR] DATABASE_URL must be a postgres:// or postgresql:// URL.');
+    console.error('If your password contains reserved characters such as #, @, ?, /, or $, percent-encode them before pasting the URL.');
     process.exit(1);
   }
 
-  console.log('✅ Required database environment variables are present and valid PostgreSQL URLs.');
+  console.log('[OK] Required database environment is present and valid.');
 
-  for (const key of required) {
-    const details = sanitizeMeta(process.env[key]);
-    console.log(
-      `- ${key}: protocol=${details.protocol}, host=${details.host}, port=${details.port}, database=${details.database}, host_type=${details.hostType}`
-    );
-  }
+  const databaseDetails = sanitizeMeta(databaseUrl);
+  console.log(
+    `- DATABASE_URL: protocol=${databaseDetails.protocol}, host=${databaseDetails.host}, port=${databaseDetails.port}, database=${databaseDetails.database}, host_type=${databaseDetails.hostType}, query_params=${databaseDetails.queryParams}`
+  );
 
-  const directHost = sanitizeMeta(process.env.DIRECT_URL)?.host || '';
-  if (classifyHost(directHost) === 'supabase-direct') {
+  console.log('[INFO] Prisma CLI and migrations use DATABASE_URL only.');
+
+  if (classifyHost(databaseDetails.host) === 'supabase-direct') {
     console.warn(
-      '⚠️ DIRECT_URL appears to use Supabase direct host (db.<project-ref>.supabase.co). ' +
+      '[WARN] DATABASE_URL looks like a Supabase direct host (db.<project-ref>.supabase.co). ' +
         'This can fail in IPv4-only environments unless IPv6 or Supabase IPv4 add-on is available. ' +
-        'Use Supabase Session Pooler for DIRECT_URL when needed.'
+        'Use the Supabase Session Pooler shape: aws-0-<region>.pooler.supabase.com.'
     );
   }
 
-  if (process.env.DATABASE_URL === process.env.DIRECT_URL) {
-    console.log('ℹ️ DIRECT_URL matches DATABASE_URL. This is allowed for Session Pooler-based IPv4-only workflows.');
+  if (databaseDetails.hostType === 'supabase-session-pooler' && databaseDetails.port !== '5432') {
+    console.warn(
+      '[WARN] DATABASE_URL uses a Supabase pooler host but not the documented Session Pooler port 5432. ' +
+        'This project expects the Session Pooler URL for Prisma CLI/status/apply diagnostics.'
+    );
   }
 
-  console.log('🔒 Secrets were not printed.');
+  console.log('[OK] Secrets were not printed.');
 }
 
 validate();

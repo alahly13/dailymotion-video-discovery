@@ -1,8 +1,17 @@
 import { z } from "zod";
 
+const postgresUrlSchema = z.string().url().refine((value) => {
+  try {
+    const protocol = new URL(value).protocol;
+    return protocol === "postgres:" || protocol === "postgresql:";
+  } catch {
+    return false;
+  }
+}, "Must be a postgres:// or postgresql:// URL.");
+
 const requiredServerSchema = z.object({
-  DATABASE_URL: z.string().min(1),
-  DIRECT_URL: z.string().min(1),
+  DATABASE_URL: postgresUrlSchema,
+  DIRECT_URL: postgresUrlSchema,
   GEMINI_API_KEY: z.string().min(1),
 });
 
@@ -26,9 +35,24 @@ const optionalServerSchema = z.object({
   CHANNEL_FETCH_DELAY_MS: z.coerce.number().int().nonnegative().default(250),
 });
 
+function isSupabaseDirectHost(raw: string) {
+  try {
+    return /^db\.[a-z0-9-]+\.supabase\.co$/i.test(new URL(raw).hostname);
+  } catch {
+    return false;
+  }
+}
+
 export const serverEnv = requiredServerSchema.parse(process.env);
 export const publicEnv = publicSchema.parse(process.env);
 export const optionalServerEnv = optionalServerSchema.parse(process.env);
+
+if (isSupabaseDirectHost(serverEnv.DIRECT_URL)) {
+  console.warn(
+    "⚠️ DIRECT_URL uses Supabase direct host (db.<project-ref>.supabase.co). " +
+      "This may fail in IPv4-only online environments (Vercel/Codespaces/GitHub Actions) unless IPv6 or Supabase IPv4 add-on is available."
+  );
+}
 
 export const env = {
   geminiApiKey: serverEnv.GEMINI_API_KEY,

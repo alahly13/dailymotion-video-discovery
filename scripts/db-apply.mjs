@@ -38,38 +38,19 @@ function parseMeta(raw) {
   }
 }
 
-function isPostgresUrl(raw) {
-  try {
-    const protocol = new URL(raw).protocol;
-    return protocol === 'postgres:' || protocol === 'postgresql:';
-  } catch {
-    return false;
-  }
-}
-
 function isProductionLikeHost(host = '') {
   return /(prod|production|live|primary|supabase\.co)/i.test(host);
 }
 
 function validateEnv() {
-  const required = ['DATABASE_URL', 'DIRECT_URL'];
-  const missing = required.filter((k) => !process.env[k] || !process.env[k].trim());
+  const dbMeta = parseMeta(process.env.DATABASE_URL || '');
+  const directMeta = parseMeta(process.env.DIRECT_URL || '');
 
-  if (missing.length > 0) {
-    console.error(`❌ Missing required environment variable(s): ${missing.join(', ')}`);
-    console.error('Set DATABASE_URL and DIRECT_URL before running migrations.');
+  if (!dbMeta || !directMeta) {
+    console.error('❌ DATABASE_URL and DIRECT_URL must be valid PostgreSQL URLs.');
+    console.error('Run `npm run db:validate` for details.');
     process.exit(1);
   }
-
-  const invalid = required.filter((k) => !isPostgresUrl(process.env[k]));
-  if (invalid.length) {
-    console.error(`❌ Invalid PostgreSQL URL(s): ${invalid.join(', ')}`);
-    console.error('Use Supabase Postgres URLs from Dashboard → Connect.');
-    process.exit(1);
-  }
-
-  const dbMeta = parseMeta(process.env.DATABASE_URL);
-  const directMeta = parseMeta(process.env.DIRECT_URL);
 
   console.log('ℹ️ Database target summary (sanitized):');
   console.log(`- DATABASE_URL host=${dbMeta.host}, database=${dbMeta.database}, protocol=${dbMeta.protocol}`);
@@ -85,10 +66,18 @@ function validateEnv() {
   }
 }
 
+function printConnectionTroubleshooting() {
+  console.error('Troubleshooting checklist:');
+  console.error('- Prefer Supabase Session Pooler URL for DATABASE_URL in Vercel/Codespaces/GitHub Actions.');
+  console.error('- If DIRECT_URL direct host fails, use the same Session Pooler URL as DATABASE_URL.');
+  console.error('- Verify Supabase password and project reference are correct.');
+  console.error('- Confirm environment IPv4/IPv6 support (direct db.<project-ref>.supabase.co may require IPv6).');
+}
+
 function main() {
   console.log('🔎 Running migration preflight checks...');
-  validateEnv();
   runCommand('node', ['scripts/db-validate-env.mjs']);
+  validateEnv();
 
   console.log('📋 Checking migration status...');
   runCommand('npx', ['prisma', 'migrate', 'status']);
@@ -107,6 +96,6 @@ try {
 } catch (error) {
   console.error('❌ Migration workflow failed.');
   console.error(error instanceof Error ? error.message : String(error));
-  console.error('Next steps: verify Supabase connection strings, network access, and committed prisma/migrations files.');
+  printConnectionTroubleshooting();
   process.exit(1);
 }

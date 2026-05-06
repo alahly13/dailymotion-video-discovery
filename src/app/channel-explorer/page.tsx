@@ -69,10 +69,10 @@ export default function ChannelExplorerPage() {
 
   return (
     <div className="space-y-8">
-      <section className="rounded-[2rem] border border-slate-200/70 bg-white/70 p-8 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-950/60">
-        <p className="text-sm font-bold uppercase tracking-[0.25em] text-blue-600 dark:text-blue-400">Core MVP Feature</p>
+      <section className="rounded-[2rem] border border-[var(--border)] bg-[var(--card)] p-8 shadow-sm backdrop-blur sm:p-10">
+        <p className="text-sm font-bold uppercase tracking-[0.25em] text-[var(--accent)]">Core MVP Feature</p>
         <h1 className="mt-3 max-w-4xl text-4xl font-black tracking-tight sm:text-6xl">Fetch, manifest, filter, and preview public Dailymotion channel metadata.</h1>
-        <p className="mt-5 max-w-3xl text-lg text-slate-600 dark:text-slate-300">Fetch All safely paginates through public API results with deduplication, stop control, stale-response prevention, and a manifest-only filter pipeline.</p>
+        <p className="mt-5 max-w-3xl text-lg text-[var(--muted-foreground)]">Fetch All safely paginates through public API results with deduplication, stop control, stale-response prevention, and a manifest-only filter pipeline.</p>
       </section>
       <ChannelInputPanel value={input} loading={loading} onChange={setInput} onAnalyze={analyze} onFetchFirst={() => fetchPath("/api/dailymotion/channel/fetch")} onFetchAll={() => fetchPath("/api/dailymotion/channel/fetch-all")} onStop={stopFetching} />
       {analysis ? <div className="rounded-2xl bg-emerald-100 p-4 text-sm font-semibold text-emerald-900 dark:bg-emerald-950 dark:text-emerald-100">Detected: {analysis}</div> : null}
@@ -81,7 +81,7 @@ export default function ChannelExplorerPage() {
       <ChannelManifestSummary manifest={manifest} />
       <AdvancedFilterPanel filters={filters} onChange={setFilters} onReset={() => setFilters(defaultAdvancedVideoFilters)} />
       <ActiveFilterChips filters={filters} />
-      <div className="flex items-center justify-between"><h2 className="text-2xl font-black">Manifest Results</h2><p className="text-sm text-slate-500">{filteredItems.length} filtered / {manifest?.items.length ?? 0} original</p></div>
+      <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-2xl font-black tracking-tight">Manifest Results</h2><p className="text-sm text-[var(--muted-foreground)]">{filteredItems.length} filtered / {manifest?.items.length ?? 0} original</p></div>
       <VideoResultsGrid items={filteredItems} />
       <AiHelperPanel />
     </div>

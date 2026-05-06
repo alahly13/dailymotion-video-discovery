@@ -9,7 +9,10 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: `(() => { const stored = localStorage.getItem('theme'); const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches; const next = stored === 'light' || stored === 'dark' ? stored : (prefersDark ? 'dark' : 'light'); if (next === 'dark') document.documentElement.classList.add('dark'); })();` }} />
+      </head>
       <body><AppShell>{children}</AppShell></body>
     </html>
   );

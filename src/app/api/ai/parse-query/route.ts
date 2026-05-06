@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { generateGeminiText } from "@/lib/ai/gemini-client";
+import { AiRouteError, generateGeminiText } from "@/lib/ai/gemini-client";
 import { AI_SAFETY_PROMPT } from "@/lib/ai/prompts";
 
 export async function POST(request: Request) {

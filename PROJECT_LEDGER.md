@@ -46,3 +46,18 @@
   - `npm run db:status`: blocked here due to unavailable real database connection/secrets.
   - `npm run db:apply`: intentionally not executed against unknown/unconfigured database in this environment.
   - `npm run typecheck`: failed due to pre-existing project TypeScript issues unrelated to this migration workflow update.
+
+## 2026-05-06 — Supabase Session Pooler strategy for IPv4-only online environments
+
+- Updated server env validation (`src/lib/config/env.ts`) to enforce PostgreSQL URL shape for `DATABASE_URL` and `DIRECT_URL` without assuming `DIRECT_URL` must be a Supabase direct host.
+- Added non-fatal runtime warning when `DIRECT_URL` targets `db.<project-ref>.supabase.co`, noting potential IPv6-only connectivity issues in Vercel/Codespaces/GitHub Actions.
+- Updated `.env.example` to explicitly document Session Pooler-first guidance for `DATABASE_URL` and allow `DIRECT_URL=DATABASE_URL` for IPv4-only online workflows.
+- Updated `scripts/db-validate-env.mjs` to accept Session Pooler URLs for both variables, print only sanitized host metadata, and warn on Supabase direct host usage.
+- Updated `scripts/db-apply.mjs` to always run db env validation first and provide clear Prisma connection troubleshooting emphasizing Session Pooler fallback.
+- Updated `README.md` with a dedicated "Supabase connection strategy for Vercel/Codespaces" section covering Vercel/Codespaces/GitHub Actions secret placement and IPv4/IPv6 guidance.
+- Prisma datasource kept as `url=DATABASE_URL` and `directUrl=DIRECT_URL`; no hardcoded credentials and no IPv6-only requirement introduced.
+- Files changed: `src/lib/config/env.ts`, `.env.example`, `scripts/db-validate-env.mjs`, `scripts/db-apply.mjs`, `README.md`, `PROJECT_LEDGER.md`.
+- Tests in this environment:
+  - `npm run db:validate` with placeholder Session Pooler env vars: passed.
+  - `npm run typecheck`: failed due to pre-existing TypeScript issues unrelated to this DB connection strategy change.
+  - `npm run db:status` and `npm run db:apply`: not run here due to missing real database credentials/access in this environment.

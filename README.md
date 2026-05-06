@@ -107,3 +107,33 @@ A manual workflow is available at `.github/workflows/db-migrate.yml`.
 - Dailymotion API failures return typed safe responses (`rate_limited`, `network_error`, `invalid_response`, `unauthorized`, `unavailable`) and preserve partial manifest data.
 - Gemini failures are isolated to AI routes and return controlled `ok: false` payloads.
 - Supabase service role key is optional/server-only and should only be used for privileged flows.
+
+
+## Supabase connection strategy for Vercel/Codespaces
+
+### Session Pooler vs Direct connection
+
+- **Session Pooler (`*.pooler.supabase.com`)**: best default for online IPv4-first environments (Vercel, GitHub Codespaces, GitHub Actions).
+- **Direct (`db.<project-ref>.supabase.co`)**: can require IPv6 support (or paid IPv4 add-on), so it may fail on IPv4-only networks.
+
+### Recommended environment variable mapping
+
+- `DATABASE_URL` (server-only, required): use Supabase Session Pooler.
+- `DIRECT_URL` (server-only, required for Prisma migrations):
+  - use direct URL only when IPv6 works in your environment, or
+  - reuse the same Session Pooler value as `DATABASE_URL` when IPv6 direct connectivity is unavailable.
+
+### Where to configure secrets
+
+- **Vercel**: Project → Settings → Environment Variables
+  - Add `DATABASE_URL`, `DIRECT_URL`, and all other required keys from `.env.example`.
+- **GitHub Codespaces**: Repository/Account Codespaces Secrets
+  - Add `DATABASE_URL`, `DIRECT_URL`, and required app/API keys.
+- **GitHub Actions**: Repository → Settings → Secrets and variables → Actions
+  - Add `DATABASE_URL` and `DIRECT_URL` for `.github/workflows/db-migrate.yml` and any runtime workflows.
+
+### Security reminders
+
+- Never commit real `.env` values.
+- Never expose `DATABASE_URL` or `DIRECT_URL` as `NEXT_PUBLIC_*`.
+- Migration/validation scripts in this repo print sanitized host metadata only (no passwords/full URLs).

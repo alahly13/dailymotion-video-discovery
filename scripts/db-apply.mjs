@@ -48,7 +48,7 @@ function isPostgresUrl(raw) {
 }
 
 function isProductionLikeHost(host = '') {
-  return /(prod|production|live|primary|supabase\.co)/i.test(host);
+  return /(prod|production|live|primary|supabase\.co|supabase\.com|pooler\.supabase\.com)/i.test(host);
 }
 
 function validateEnv() {

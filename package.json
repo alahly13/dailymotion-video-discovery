@@ -10,9 +10,12 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
-    "db:push": "prisma db push",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "db:status": "prisma migrate status",
+    "db:apply": "node scripts/db-apply.mjs",
+    "db:migrate:deploy": "prisma migrate deploy",
+    "db:validate": "node scripts/db-validate-env.mjs",
+    "db:create-migration": "prisma migrate dev --create-only"
   },
   "dependencies": {
     "@google/generative-ai": "latest",

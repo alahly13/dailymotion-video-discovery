@@ -40,8 +40,10 @@ export function ChannelFetchProgress({
     ["Coverage percent", coveragePercent === null ? "Unknown" : `${coveragePercent.toFixed(2)}%`],
     ["Profile", progress?.fetchProfile ?? "None"],
     ["Windows processed", progress?.windowsProcessed ?? 0],
-    ["Windows queued", progress?.windowsQueued ?? 0],
+    ["Active windows", progress?.activeWindowCount ?? 0],
+    ["Queued windows", progress?.queuedWindowCount ?? progress?.windowsQueued ?? 0],
     ["Windows completed", progress?.windowsCompleted ?? 0],
+    ["Concurrent workers", progress ? `${progress.currentConcurrentWorkers}/${progress.maxConcurrentWorkers}` : "0/1"],
     ["Duplicates", progress?.duplicateCount ?? 0],
     ["Capped windows", progress?.cappedWindowCount ?? 0],
     ["Failed windows", progress?.failedWindowCount ?? 0],
@@ -62,6 +64,9 @@ export function ChannelFetchProgress({
       </div>
       {persistenceWarning ? (
         <div className="rounded-md border border-[var(--border)] bg-[var(--surface-muted)] p-3 text-sm leading-6 text-[var(--muted-foreground)]">{persistenceWarning}</div>
+      ) : null}
+      {progress?.parallelismReason ? (
+        <div className="rounded-md border border-[var(--border)] bg-[var(--surface-muted)] p-3 text-sm leading-6 text-[var(--muted-foreground)]">{progress.parallelismReason}</div>
       ) : null}
     </Card>
   );

@@ -518,6 +518,7 @@ function windowSummary(window: PersistedJobWithGraph["windows"][number]): FetchW
     errorMessage: typeof window.errorJson === "object" && window.errorJson && "message" in window.errorJson ? String(window.errorJson.message) : null,
     startedAt: iso(window.startedAt),
     completedAt: iso(window.completedAt),
+    executionOrder: null,
   };
 }
 
@@ -1036,6 +1037,9 @@ export async function persistChannelFetchSnapshot(snapshot: ChannelFetchJobSnaps
         fetchProfile: snapshot.settings.fetchProfile,
         pagesFetched: snapshot.progress.pagesFetched,
         windowsProcessed: snapshot.progress.windowsProcessed,
+        activeWindowCount: snapshot.progress.activeWindowCount,
+        queuedWindowCount: snapshot.progress.queuedWindowCount,
+        currentConcurrentWorkers: snapshot.progress.currentConcurrentWorkers,
         uniqueItemsCollected: snapshot.progress.uniqueItemsCollected,
         currentWindowId: snapshot.progress.currentWindow?.id ?? null,
         currentPage: snapshot.progress.currentWindow?.nextPageToFetch ?? null,
@@ -1243,6 +1247,12 @@ export async function getPersistedChannelFetchJob(jobId: string): Promise<Channe
 function persistedJobSnapshot(job: PersistedJobWithGraph): ChannelFetchJobSnapshot {
   const metadata = metadataForSource(job.source);
   const windows = job.windows.map(windowSummary);
+  windows
+    .filter((window) => window.startedAt)
+    .sort((a, b) => Date.parse(a.startedAt ?? "") - Date.parse(b.startedAt ?? ""))
+    .forEach((window, index) => {
+      window.executionOrder = index + 1;
+    });
   const coverage = buildCoverageFromJob(job);
   const manifest = manifestFromJob(job, metadata);
   const historyEntry = historyEntryFromJob(job);
@@ -1250,6 +1260,9 @@ function persistedJobSnapshot(job: PersistedJobWithGraph): ChannelFetchJobSnapsh
   const currentWindow = activeWindowId ? windows.find((window) => window.id === activeWindowId) ?? null : null;
   const settings = fromJsonObject<ChannelFetchSettings>(job.settingsJson, {} as ChannelFetchSettings);
   const attemptNumber = attemptNumberFromJob(job);
+  const progressJson = jsonObject(job.progressJson);
+  const activeWindows = windows.filter((window) => window.status === "running");
+  const queuedWindowCount = windows.filter((window) => window.status === "pending").length;
 
   return {
     id: job.id,
@@ -1270,8 +1283,15 @@ function persistedJobSnapshot(job: PersistedJobWithGraph): ChannelFetchJobSnapsh
       currentPageNumber: job.currentPage,
       currentDateWindow: currentWindow?.windowStart || currentWindow?.windowEnd ? `${currentWindow.windowStart ?? "open"} -> ${currentWindow.windowEnd ?? "open"}` : null,
       windowsProcessed: job.windowsProcessed,
-      windowsQueued: windows.filter((window) => window.status === "pending" || window.status === "running").length,
+      windowsQueued: queuedWindowCount + activeWindows.length,
+      activeWindowCount: activeWindows.length,
+      queuedWindowCount,
       windowsCompleted: windows.filter((window) => window.status === "complete").length,
+      activeWindows,
+      currentConcurrentWorkers: Number(progressJson?.currentConcurrentWorkers ?? activeWindows.length),
+      maxConcurrentWorkers: Number(settings.concurrency ?? progressJson?.maxConcurrentWorkers ?? 1),
+      parallelismEnabled: Boolean(progressJson?.parallelismEnabled ?? false),
+      parallelismReason: typeof progressJson?.parallelismReason === "string" ? progressJson.parallelismReason : null,
       itemsCollected: Number(job.itemsCollected),
       uniqueItemsCollected: Number(job.uniqueItemsCollected),
       duplicateCount: Number(job.duplicateCount),

@@ -2,6 +2,24 @@
 
 Current database policy is defined by the newest entry below. Older entries are retained as historical record and may describe superseded `DIRECT_URL` behavior that is no longer active.
 
+## 2026-05-07 - Channel Explorer live search, parallel windows, and feedback cards
+
+- Read the required ledgers/docs, README, env example, Prisma schema, Channel Explorer page/components, saved-channel components, video cards, Dailymotion fetch settings/deep-fetch service, manifest/dedupe helper, persistence repository, current Next.js route docs, FlexSearch docs, and Supabase changelog context before editing.
+- Added a shared FlexSearch helper at `src/lib/search/video-flexsearch.ts` and wired `/channel-explorer` with a dedicated "Search Current Results" panel. It searches current live attempt results, the loaded combined saved manifest, or the selected/current attempt without calling Dailymotion.
+- Updated the Channel Explorer pipeline so local search runs first, advanced Result Filters run second, filter sorting runs third, and the result grid renders fourth. Zero-valued metadata such as `0` views is preserved in searchable text.
+- Added server-only independent-window concurrency caps: `CHANNEL_FETCH_CONCURRENCY` and `CHANNEL_FETCH_MAX_CONCURRENCY`. The backend clamps requested concurrency, forces sequential mode for preview/standard/single-window modes, and caps max concurrency at 5.
+- Updated the deep-fetch chunk processor to process multiple independent windows per `/jobs/next` request while never processing more than one page from the same window in a single chunk. Resume checkpoints and per-window page order remain auditable.
+- Added active/queued window counts, current/max workers, active windows, parallelism reason, and execution-order data to fetch progress. These values persist through existing `FetchJob.progressJson`, `FetchWindow`, `FetchPageAttempt`, and `FetchJobEvent` paths; no schema change was needed.
+- Added `ChannelWindowFeedbackPanel` with window/year cards for queued, running, complete, capped, split, failed, and stopped windows, including pages fetched, videos returned, unique added, duplicates skipped, status copy, recent page groups, and resume action when available.
+- Reorganized `/channel-explorer` into clearer Source Input, Metadata, Fetch Configuration, Active Progress, Timeline Feedback, Fetch History, Coverage, Manifest Search, Result Filters, Manifest Results, and Export/Open Saved Manifest sections.
+- Updated README, `.env.example`, and `dailymotion_discovery_ledger.md` for live search behavior, FlexSearch reuse, parallel fetch behavior, new env variables, feedback persistence, UI organization, and migration/apply status.
+- Verification: `npm run db:validate` passed; `npm run db:status` passed and reported the schema up to date; `npx prisma validate` passed; `npx prisma generate` passed; `npm run typecheck` passed; `npm run build` passed on Next.js 16.2.5.
+- Runtime smoke: built app served on `http://127.0.0.1:3002`; `/channel-explorer` and `/channels` returned HTTP 200; rendered HTML contained the new Search Current Results, Fetch Timeline / Window Feedback, Window concurrency, and "Search does not call Dailymotion" UI text.
+- Manual API smoke: a bounded quick-preview fetch against `https://www.dailymotion.com/channel/news` kept page size 100, used concurrency 1, fetched 1 page, saw 100 returned items, persisted to database, and stopped at the configured 10-item max. A bounded deep-balanced smoke with concurrency 2 selected `2/2` workers and persisted two failed date-window attempts because Dailymotion date-window requests timed out; the failure is represented as persisted failed windows rather than a false coverage claim.
+- Saved-search smoke: `POST /api/dailymotion/channel/search-saved` returned database-backed English results for `news` and a UTF-8 Arabic query returned one saved match; these searches used persisted data only and did not call Dailymotion.
+- Migration created: no. Migration applied: no. `db:apply` run: no.
+- Safety: `DATABASE_URL` remains the only database URL; `DIRECT_URL` was not restored; no private Dailymotion access, video download/scrape/rehost behavior, destructive Prisma command, table drop, or secret printing was introduced.
+
 ## 2026-05-07 - Saved channel browser, attempt details, Gemini model env, and saved-results search
 
 - Read the current ledgers/docs, env example, package manifests/lockfile, Prisma schema/migration, current persistence repository, Dailymotion deep-fetch service, Channel Explorer UI, type contracts, Gemini client/env code, local Next.js 16 docs, and current search-library/Gemini docs before editing.

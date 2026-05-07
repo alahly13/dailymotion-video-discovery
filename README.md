@@ -174,6 +174,23 @@ Dailymotion can cap a single result window around 1000 videos. Deep fetch uses p
 
 Channel metadata requests use public profile metadata when available, including `videos_total`. The UI labels this as "Reported total from Dailymotion"; it is not a guaranteed collectable total because private, deleted, unavailable, or geo-restricted videos may affect comparison.
 
+Parallel window fetching:
+
+- Deep profiles can process independent date windows concurrently through the chunked `/api/dailymotion/channel/jobs/next` loop.
+- Pages inside the same window remain sequential, so resume cursors stay auditable and "Continue Fetch" does not start from zero.
+- `CHANNEL_FETCH_CONCURRENCY` sets the default requested worker count, and `CHANNEL_FETCH_MAX_CONCURRENCY` is the server hard cap. The current maximum cap is 5.
+- Preview, standard, and single-window modes fall back to sequential execution and show the reason in progress feedback.
+- Progress now tracks active windows, queued windows, completed windows, failed/capped windows, current worker count, total API requests, unique videos added, and duplicates skipped.
+
+Channel Explorer live search:
+
+- `/channel-explorer` includes a dedicated "Search Current Results" section.
+- Search runs over the currently loaded live attempt, the loaded combined saved manifest, or the selected/current attempt scope.
+- The search pipeline is search first, then Result Filters, then the selected sort/render mode.
+- Search and filters never call Dailymotion. They only operate on collected/live manifest items or saved manifest items already loaded from the database.
+- FlexSearch powers the local multilingual index with title, owner/channel, description/tags, language, year/date, duration, views, attempt number, fetch profile, page, collected date, and window range fields.
+- For very large saved catalogs, use `/channels/[sourceId]` server pagination/search; `/channel-explorer` indexes the loaded/live manifest state intentionally.
+
 Saved manifests and result viewing:
 
 - `/channels` lists persisted Dailymotion sources that have fetch attempts, including reported total, collected unique videos, estimated remaining count, coverage status/confidence, attempt count, latest fetch time, and state-aware fetch actions.
@@ -186,6 +203,7 @@ Saved manifests and result viewing:
 - Result views include "Combined Results", "By Fetch Attempt", and "Current Attempt". Search/filter controls operate only on the selected saved result view and never call Dailymotion.
 - Result cards show compact fetch provenance when available: source, attempt number, fetch profile/status, date window, API page, collected time, duplicate/new status, and manifest relationship.
 - Export controls can download the combined channel manifest or selected attempt as JSON or NDJSON snapshots. Exports include public source/coverage/attempt/video metadata only and must not include secrets or server-only environment values.
+- The Channel Explorer timeline shows persisted window feedback cards with queued/running/completed/capped/split/failed/stopped states, page counts, videos returned, unique additions, duplicates skipped, and execution order when parallel chunks were used.
 
 Saved-results search:
 
@@ -208,6 +226,8 @@ New server hard caps:
 - `MAX_CHANNEL_FETCH_WINDOW_DEPTH`: maximum recursive split depth.
 - `MAX_CHANNEL_FETCH_PAGE_SIZE`: maximum Dailymotion page size, capped at 100.
 - `CHANNEL_FETCH_MIN_DELAY_MS`: minimum delay the browser cannot bypass.
+- `CHANNEL_FETCH_CONCURRENCY`: default independent-window workers for deep fetches.
+- `CHANNEL_FETCH_MAX_CONCURRENCY`: server hard cap for independent-window workers, capped by code at 5.
 - `CHANNEL_FETCH_DEFAULT_PROFILE`: default fetch profile.
 - `CHANNEL_FETCH_JOB_TTL_HOURS` and `TEMP_MANIFEST_TTL_HOURS`: temporary operational retention.
 

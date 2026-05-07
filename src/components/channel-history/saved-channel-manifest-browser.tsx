@@ -2,11 +2,11 @@
 
 import { useMemo, useState } from "react";
 import { Download, Loader2, Search, SlidersHorizontal } from "lucide-react";
-import { Index } from "flexsearch";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { VideoResultsGrid } from "@/components/video/video-results-grid";
+import { buildVideoSearchIndex, searchVideoIndex } from "@/lib/search/video-flexsearch";
 import type {
   ChannelCoverage,
   ChannelSourceSummary,
@@ -28,29 +28,6 @@ const sortOptions: Array<{ value: SavedChannelSort; label: string }> = [
   { value: "title_asc", label: "Title A-Z" },
 ];
 
-function text(value: string | number | null | undefined) {
-  return value === null || value === undefined ? "" : String(value);
-}
-
-function searchableText(video: NormalizedVideoMetadata) {
-  const provenance = video.collectionProvenance;
-  return [
-    video.title,
-    video.description,
-    video.ownerName,
-    video.channelName,
-    video.language,
-    video.tags.join(" "),
-    text(video.year),
-    text(video.duration),
-    text(video.views),
-    text(provenance?.attemptNumber),
-    provenance?.fetchProfile,
-    provenance?.windowStart,
-    provenance?.windowEnd,
-  ].filter(Boolean).join(" ");
-}
-
 function exportItems(source: ChannelSourceSummary | null, items: NormalizedVideoMetadata[], format: "json" | "ndjson") {
   const body = format === "ndjson"
     ? items.map((video) => JSON.stringify({ type: "video", source, video })).join("\n")
@@ -62,33 +39,6 @@ function exportItems(source: ChannelSourceSummary | null, items: NormalizedVideo
   link.download = `dailymotion-channel-manifest.${format === "ndjson" ? "ndjson" : "json"}`;
   link.click();
   URL.revokeObjectURL(url);
-}
-
-function buildLoadedIndex(items: NormalizedVideoMetadata[]) {
-  const documents = new Map(items.map((item) => [item.id, item]));
-  const title = new Index({ tokenize: "full", encoder: "Normalize", cache: true });
-  const owner = new Index({ tokenize: "full", encoder: "Normalize", cache: true });
-  const body = new Index({ tokenize: "full", encoder: "Normalize", cache: true });
-  const metadata = new Index({ tokenize: "full", encoder: "Normalize", cache: true });
-
-  for (const item of items) {
-    const provenance = item.collectionProvenance;
-    title.add(item.id, item.title);
-    owner.add(item.id, [item.ownerName, item.channelName, provenance?.sourceName, provenance?.sourceHandle].filter(Boolean).join(" "));
-    body.add(item.id, [item.description, item.tags.join(" ")].filter(Boolean).join(" "));
-    metadata.add(item.id, [
-      item.language,
-      text(item.year),
-      text(item.duration),
-      text(item.views),
-      text(provenance?.attemptNumber),
-      provenance?.fetchProfile,
-      provenance?.windowStart,
-      provenance?.windowEnd,
-    ].filter(Boolean).join(" "));
-  }
-
-  return { documents, title, owner, body, metadata };
 }
 
 export function SavedChannelManifestBrowser({
@@ -124,31 +74,12 @@ export function SavedChannelManifestBrowser({
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const loadedIndex = useMemo(() => buildLoadedIndex(items), [items]);
+  const loadedIndex = useMemo(() => buildVideoSearchIndex(items), [items]);
   const loadedIndexItems = useMemo(() => {
-    const normalizedQuery = query.trim().replace(/\s+/gu, " ");
-    if (!normalizedQuery) return items;
-
     // The loaded FlexSearch index is deliberately scoped to the current page of
     // saved DB results. It gives instant multilingual filtering without silently
     // fetching more from Dailymotion or pretending every stored row is in memory.
-    const scores = new Map<string, number>();
-    const apply = (ids: unknown[], weight: number) => {
-      ids.forEach((id, rank) => scores.set(String(id), (scores.get(String(id)) ?? 0) + weight + Math.max(0, 20 - rank)));
-    };
-    const options = { limit: 200, suggest: fuzzy };
-    apply(loadedIndex.title.search(normalizedQuery, options) as string[], 10);
-    apply(loadedIndex.owner.search(normalizedQuery, options) as string[], 6);
-    apply(loadedIndex.body.search(normalizedQuery, options) as string[], 5);
-    apply(loadedIndex.metadata.search(normalizedQuery, options) as string[], 2);
-
-    const exact = normalizedQuery.toLocaleLowerCase();
-    return [...scores.entries()]
-      .map(([id, score]) => ({ video: loadedIndex.documents.get(id), score }))
-      .filter((entry): entry is { video: NormalizedVideoMetadata; score: number } => Boolean(entry.video))
-      .filter(({ video }) => !exactPhrase || searchableText(video).toLocaleLowerCase().includes(exact))
-      .sort((a, b) => b.score - a.score)
-      .map(({ video }) => video);
+    return searchVideoIndex(loadedIndex, query, { exactPhrase, fuzzy, limit: 200 });
   }, [exactPhrase, fuzzy, items, loadedIndex, query]);
 
   const displayItems = mode === "loaded-index" ? loadedIndexItems : items;

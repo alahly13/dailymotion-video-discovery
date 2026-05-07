@@ -2,7 +2,7 @@
 
 Updated: 2026-05-07
 Repo path: `F:\discovery\dailymotion-video-discovery`
-Scope: Project source-of-truth ledger, updated after saved channel pages, attempt details, Gemini model env, combined manifest search, and provenance/dedupe hardening.
+Scope: Project source-of-truth ledger, updated after Channel Explorer live-search, parallel window-fetch, feedback timeline, and UI organization hardening.
 
 ## Table of Contents
 
@@ -23,6 +23,60 @@ Scope: Project source-of-truth ledger, updated after saved channel pages, attemp
 - [Known Limitations](#known-limitations)
 - [Future Roadmap](#future-roadmap)
 - [Agent Instructions](#agent-instructions)
+
+## 2026-05-07 Channel Explorer live search, parallel window fetch, and window feedback
+
+**Scope**
+
+- Added a dedicated live "Search Current Results" section inside `/channel-explorer` without adding any Dailymotion search/fetch behavior to typing, search toggles, filters, or sort controls.
+- Reused the existing FlexSearch choice through a shared `src/lib/search/video-flexsearch.ts` helper so live Channel Explorer search and saved loaded-result search share the same multilingual loaded-index behavior.
+- Added controlled independent-window concurrency for deep channel fetch chunks while preserving ordered page fetching inside each window.
+- Added persisted progress fields for active/queued windows, worker counts, execution-order feedback, and parallelism explanations through existing `FetchJob.progressJson`, `FetchWindow`, `FetchPageAttempt`, and `FetchJobEvent` structures.
+- Added a Channel Explorer "Fetch Timeline / Window Feedback" section showing queued/running/completed/capped/split/failed/stopped windows, pages fetched, videos returned, unique additions, duplicates skipped, and execution order.
+- Reorganized `/channel-explorer` into clearer Source Input, Channel Metadata, Fetch Configuration, Active Fetch Progress, Fetch Timeline, Fetch Attempts/History, Coverage, Manifest Search, Result Filters, Manifest Results, and Export/Open Saved Manifest sections.
+
+**Search behavior**
+
+- `/channel-explorer` search modes are "Current live results", "Combined saved manifest", and "Selected attempt".
+- Search fields include title, description, owner/channel/source labels, tags, language, published year/date, duration, views, attempt number, fetch profile, page number, collected date, and window range.
+- The local pipeline is now: FlexSearch/local search first, advanced result filters second, filter sort third, render fourth.
+- Search preserves valid zero values by stringifying `0` metadata instead of treating it as absent.
+- Search/filter interactions do not call Dailymotion. Combined saved-manifest search uses the loaded DB-backed manifest state in Channel Explorer; larger saved catalogs should use `/channels/[sourceId]` server pagination/search.
+
+**Parallel fetch behavior**
+
+- New server-only caps are `CHANNEL_FETCH_CONCURRENCY` (default 3) and `CHANNEL_FETCH_MAX_CONCURRENCY` (default 5, code-capped at 5).
+- `ChannelFetchSettings.concurrency` is server-clamped in `resolveChannelFetchSettings`; preview, standard, and single-window modes force concurrency to 1.
+- `processNextChannelFetchChunk` now selects up to the effective concurrency of independent unfinished windows per request.
+- The selector never schedules two pages from the same window in one request, preserving page order and resume correctness.
+- Deduplication remains shared across the runtime job through the same strong multi-field dedupe key used before this entry.
+- If parallelism is not safe or not useful, progress reports a reason and falls back to sequential execution.
+
+**Database and migration truth**
+
+- No migration was required or created.
+- Canonical tables remain `video_sources`, `videos`, `manifests`, `manifest_items`, `fetch_jobs`, `fetch_windows`, `fetch_page_attempts`, `source_catalog_snapshots`, and `fetch_job_events`.
+- Window/page feedback persists through existing `fetch_windows`, `fetch_page_attempts`, `fetch_job_events`, and `fetch_jobs.progress_json`.
+- No legacy table, fallback table, `DIRECT_URL`, dual database URL, or old persistence path was introduced.
+
+**Verification**
+
+- `npm run db:validate`: passed with sanitized `DATABASE_URL` diagnostics and `DATABASE_URL`-only policy.
+- `npm run db:status`: passed; Prisma reported the schema is up to date with the single applied migration.
+- `npx prisma validate`: passed.
+- `npx prisma generate`: passed.
+- `npm run typecheck`: passed.
+- `npm run build`: passed on Next.js 16.2.5.
+- Runtime smoke: built app served on `http://127.0.0.1:3002`; `/channel-explorer` and `/channels` returned HTTP 200.
+- HTML smoke: `/channel-explorer` included Search Current Results, Fetch Timeline / Window Feedback, Window concurrency, and Search does not call Dailymotion copy.
+- Manual API smoke: a bounded quick-preview fetch against `https://www.dailymotion.com/channel/news` kept page size 100, used concurrency 1, fetched 1 page, saw 100 returned provider items, persisted in database, and stopped at the configured 10-item max. A bounded deep-balanced fetch with concurrency 2 selected `2/2` workers and persisted failed date-window windows because Dailymotion date-window requests timed out; no complete coverage was claimed.
+- Saved search smoke: database-backed English `news` search returned saved results; UTF-8 Arabic `العربية` search returned one saved match.
+
+**Safety**
+
+- `DATABASE_URL` remains the only database URL. `DIRECT_URL` was not restored.
+- `db:apply` was not run for this entry.
+- No `prisma migrate reset`, `prisma db push`, table drops, destructive DB commands, private Dailymotion access, video downloading, stream scraping, rehosting, or secret printing was introduced.
 
 ## 2026-05-07 Saved channel browser, attempt detail pages, Gemini model env, and saved-results search
 

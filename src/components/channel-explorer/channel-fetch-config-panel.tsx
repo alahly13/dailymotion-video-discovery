@@ -99,7 +99,7 @@ export function ChannelFetchConfigPanel({
       </div>
 
       <div className="rounded-md border border-[var(--border)] bg-[var(--surface-muted)] p-3 text-sm leading-6 text-[var(--muted-foreground)]">
-        Dailymotion can cap a single result window around 1000 videos. Deep Fetch splits public metadata by date windows when supported.
+        Dailymotion can cap a single result window around 1000 videos. Deep Fetch splits public metadata by date windows when supported. Window concurrency only runs independent date windows; pages inside a window remain ordered for resume safety.
       </div>
 
       <div className="grid gap-3 md:grid-cols-3">
@@ -127,11 +127,12 @@ export function ChannelFetchConfigPanel({
         </label>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-5">
+      <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-6">
         <NumberField label="Max videos" min={1} max={safetyCaps?.maxItems} value={settings.maxItems} onChange={(value) => onChange({ ...settings, maxItems: value })} />
         <NumberField label="Max total pages" min={1} max={safetyCaps?.maxTotalPages} value={settings.maxTotalPages} onChange={(value) => onChange({ ...settings, maxTotalPages: value })} />
         <NumberField label="Max windows" min={1} max={safetyCaps?.maxWindows} value={settings.maxWindows} onChange={(value) => onChange({ ...settings, maxWindows: value })} />
         <NumberField label="Page size" min={1} max={safetyCaps?.maxPageSize ?? 100} value={settings.pageSize} onChange={(value) => onChange({ ...settings, pageSize: value })} />
+        <NumberField label="Window concurrency" min={1} max={safetyCaps?.maxConcurrency ?? 1} value={settings.concurrency} onChange={(value) => onChange({ ...settings, concurrency: value })} />
         <NumberField label="Delay ms" min={safetyCaps?.minDelayMs ?? 0} value={settings.delayMs} onChange={(value) => onChange({ ...settings, delayMs: value })} />
       </div>
 

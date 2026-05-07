@@ -61,6 +61,8 @@ interface RuntimeFetchJob {
   duplicateCount: number;
   cappedWindowCount: number;
   failedWindowCount: number;
+  lastWorkerCount: number;
+  windowExecutionSequence: number;
   maxItemsReached: boolean;
   partialManifestPreserved: boolean;
   resumable: boolean;
@@ -154,6 +156,7 @@ function buildWindow(unit: TimeWindowUnit, depth: number, windowStart: string | 
     errorMessage: null,
     startedAt: null,
     completedAt: null,
+    executionOrder: null,
   };
 }
 
@@ -180,6 +183,36 @@ function dateWindowLabel(window: FetchWindowSummary | null) {
   if (!window) return null;
   if (!window.windowStart && !window.windowEnd) return "All available dates";
   return `${window.windowStart ?? "open"} -> ${window.windowEnd ?? "open"}`;
+}
+
+function parallelismState(job: Pick<RuntimeFetchJob, "settings" | "windows">) {
+  const concurrency = job.settings.concurrency ?? 1;
+  if (job.settings.fetchProfile === "quick-preview" || job.settings.fetchProfile === "standard-fetch") {
+    return { enabled: false, reason: "Sequential preview and standard profiles keep one provider window active for simple resume checkpoints." };
+  }
+
+  if (job.settings.initialWindowUnit === "all") {
+    return { enabled: false, reason: "Single result-window mode has no independent date windows to run in parallel." };
+  }
+
+  if (concurrency <= 1) {
+    return { enabled: false, reason: "Window concurrency is set to 1, so pages are processed sequentially." };
+  }
+
+  if (job.windows.filter((window) => window.status === "pending" || window.status === "running").length <= 1) {
+    return { enabled: false, reason: "Only one unfinished window is available, so this chunk stays sequential." };
+  }
+
+  return { enabled: true, reason: "Independent date windows can run concurrently; pages inside each window still run in order." };
+}
+
+function markWindowRunning(job: RuntimeFetchJob, window: RuntimeFetchWindow) {
+  window.status = "running";
+  window.startedAt ??= nowIso();
+  if (!window.executionOrder) {
+    job.windowExecutionSequence += 1;
+    window.executionOrder = job.windowExecutionSequence;
+  }
 }
 
 function generateWindows(settings: ChannelFetchSettings) {
@@ -249,6 +282,7 @@ function mergeVideos(
   let processedVideos = 0;
 
   for (const video of videos) {
+    if (job.items.length >= job.settings.maxItems && job.settings.stopWhenMaxItemsReached) break;
     processedVideos += 1;
     const dedupeKey = getVideoDedupeKey(video);
     if (job.seenVideoIds.has(dedupeKey)) {
@@ -418,6 +452,9 @@ function buildHistoryEntry(job: RuntimeFetchJob): FetchHistoryEntry {
 
 function buildProgress(job: RuntimeFetchJob) {
   const currentWindow = job.currentWindowId ? job.windows.find((window) => window.id === job.currentWindowId) ?? null : null;
+  const activeWindows = job.windows.filter((window) => window.status === "running");
+  const queuedWindowCount = job.windows.filter((window) => window.status === "pending").length;
+  const parallelism = parallelismState(job);
   return {
     attemptNumber: job.attemptNumber,
     fetchProfile: job.settings.fetchProfile,
@@ -429,8 +466,15 @@ function buildProgress(job: RuntimeFetchJob) {
     currentPageNumber: currentWindow?.nextPageToFetch ?? null,
     currentDateWindow: dateWindowLabel(currentWindow),
     windowsProcessed: job.windowsProcessed,
-    windowsQueued: job.windows.filter((window) => window.status === "pending" || window.status === "running").length,
+    windowsQueued: queuedWindowCount + activeWindows.length,
+    activeWindowCount: activeWindows.length,
+    queuedWindowCount,
     windowsCompleted: job.windows.filter((window) => window.status === "complete").length,
+    activeWindows,
+    currentConcurrentWorkers: job.lastWorkerCount,
+    maxConcurrentWorkers: job.settings.concurrency ?? 1,
+    parallelismEnabled: parallelism.enabled,
+    parallelismReason: parallelism.reason,
     itemsCollected: job.items.length + job.duplicateCount,
     uniqueItemsCollected: job.items.length,
     duplicateCount: job.duplicateCount,
@@ -522,6 +566,131 @@ function maybeFinishWhenNoPending(job: RuntimeFetchJob) {
   }
 }
 
+function effectiveWindowConcurrency(job: RuntimeFetchJob) {
+  const caps = resolveChannelFetchSettings(job.settings).caps;
+  const requested = Math.min(Math.max(1, job.settings.concurrency ?? 1), caps.maxConcurrency);
+  return parallelismState(job).enabled ? requested : 1;
+}
+
+function selectWindowsForChunk(job: RuntimeFetchJob, concurrency: number) {
+  const remainingPages = Math.max(0, job.settings.maxTotalPages - job.pagesFetched);
+  if (remainingPages <= 0) return [];
+
+  const running = job.windows.filter((window) => window.status === "running");
+  const selectedRunning = running.slice(0, Math.min(concurrency, remainingPages));
+  const remainingWorkerSlots = Math.max(0, concurrency - selectedRunning.length);
+  const remainingPageSlots = Math.max(0, remainingPages - selectedRunning.length);
+  const remainingProcessableWindows = Math.max(0, job.settings.maxWindows - job.windowsProcessed - selectedRunning.length);
+  const pendingSlots = Math.min(remainingWorkerSlots, remainingPageSlots, remainingProcessableWindows);
+  const pending = job.windows.filter((window) => window.status === "pending").slice(0, pendingSlots);
+
+  // This selector is the central safety valve for parallel deep fetch chunks:
+  // it may choose multiple independent windows, but it never schedules two API
+  // pages from the same window in one request, preserving page order and resume
+  // checkpoints even when year/month windows are processed concurrently.
+  return [...selectedRunning, ...pending];
+}
+
+async function processWindowPage(job: RuntimeFetchJob, window: RuntimeFetchWindow, signal?: AbortSignal) {
+  markWindowRunning(job, window);
+
+  const pageNumber = window.nextPageToFetch;
+  const requestParams = requestWindowParams(window);
+  const attempt: FetchPageAttemptSummary = {
+    id: crypto.randomUUID(),
+    fetchWindowId: window.id,
+    pageNumber,
+    limit: job.settings.pageSize,
+    requestParams: { page: pageNumber, limit: job.settings.pageSize, ...requestParams },
+    status: "success",
+    itemsReturned: 0,
+    uniqueItemsAdded: 0,
+    duplicateItemsFound: 0,
+    hasMore: false,
+    requestedAt: nowIso(),
+    completedAt: null,
+  };
+
+  const page = await fetchDailymotionChannelPage(job.analysis.apiPath, pageNumber, job.settings.pageSize, signal, requestParams);
+  attempt.completedAt = nowIso();
+
+  if (!page.ok || !page.data) {
+    attempt.status = page.reason === "rate_limited" ? "rate_limited" : page.reason === "unauthorized" ? "auth_or_provider_limited" : "failed";
+    window.status = "failed";
+    window.errorMessage = page.error ?? "Dailymotion page request failed.";
+    window.completedAt = nowIso();
+    job.failedWindowCount += 1;
+    job.lastError = window.errorMessage;
+    job.status = page.reason === "unauthorized" ? "auth_or_provider_limited" : page.reason === "rate_limited" ? "provider_limited" : "failed";
+    job.pageAttempts.push(attempt);
+    job.updatedAt = nowIso();
+    return;
+  }
+
+  attempt.itemsReturned = page.data.items.length;
+  attempt.limit = page.data.limit;
+  attempt.requestParams = { page: pageNumber, limit: page.data.limit, ...requestParams };
+  attempt.hasMore = page.data.hasMore;
+  const merge = mergeVideos(job, page.data.items, {
+    window,
+    pageAttemptId: attempt.id,
+    pageNumber,
+    collectedAt: attempt.completedAt ?? nowIso(),
+  });
+  attempt.uniqueItemsAdded = merge.uniqueAdded;
+  attempt.duplicateItemsFound = merge.duplicates;
+  job.pageAttempts.push(attempt);
+
+  window.pagesFetched += 1;
+  window.itemsFound += page.data.items.length;
+  window.uniqueItemsAdded += merge.uniqueAdded;
+  window.duplicateItemsFound += merge.duplicates;
+  window.hasMoreAtEnd = page.data.hasMore;
+  job.pagesFetched += 1;
+  job.lastSuccessfulCheckpoint = `${window.id}:page:${pageNumber}`;
+
+  const reachedAttemptItemLimit = merge.reachedAttemptItemLimit && (merge.stoppedBeforePageEnd || page.data.hasMore);
+  if (reachedAttemptItemLimit) job.maxItemsReached = true;
+
+  const reachedProviderCap = page.data.hasMore && (pageNumber >= providerMaxPage(job.settings.pageSize) || window.itemsFound >= PROVIDER_WINDOW_ITEM_CAP);
+  const reachedJobCaps = job.maxItemsReached || (page.data.hasMore && job.pagesFetched >= job.settings.maxTotalPages);
+
+  if (reachedProviderCap) {
+    window.reachedProviderCap = true;
+    const childWindows = job.settings.autoSplitCappedWindows ? splitWindow(window, job.settings, resolveChannelFetchSettings(job.settings).caps.maxWindowDepth) : [];
+    if (childWindows.length > 0 && job.windows.length + childWindows.length <= job.settings.maxWindows) {
+      window.status = "split";
+      window.completedAt = nowIso();
+      job.windowsProcessed += 1;
+      job.windows.splice(job.windows.indexOf(window) + 1, 0, ...childWindows);
+    } else {
+      window.status = "capped";
+      window.completedAt = nowIso();
+      job.windowsProcessed += 1;
+      job.cappedWindowCount += 1;
+      if (job.settings.stopOnCappedWindow) finishJob(job, "capped");
+    }
+  } else if (page.data.hasMore && !reachedJobCaps) {
+    window.nextPageToFetch = pageNumber + 1;
+  } else if ((page.data.hasMore || merge.stoppedBeforePageEnd) && reachedJobCaps) {
+    // This cursor is the contract between numbered attempts. When a fetch stops
+    // because of user/job caps, the next "Fetch Remaining" attempt should pick
+    // up the same source window at the next auditable API page instead of
+    // replaying completed pages and counting duplicates as progress.
+    window.nextPageToFetch = merge.stoppedBeforePageEnd ? pageNumber : pageNumber + 1;
+    window.status = "stopped";
+    window.completedAt = nowIso();
+    job.windowsProcessed += 1;
+    if (!job.maxItemsReached) finishJob(job, "partial");
+  } else {
+    window.status = "complete";
+    window.completedAt = nowIso();
+    job.windowsProcessed += 1;
+  }
+
+  if (job.maxItemsReached) finishJob(job, "max_items_reached");
+}
+
 export async function startChannelFetchJob(input: string, rawSettings: unknown, requestId?: string, signal?: AbortSignal) {
   cleanupExpiredJobs();
   const { settings, caps } = resolveChannelFetchSettings(rawSettings);
@@ -587,6 +756,8 @@ export async function startChannelFetchJob(input: string, rawSettings: unknown, 
     duplicateCount: 0,
     cappedWindowCount: 0,
     failedWindowCount: 0,
+    lastWorkerCount: 0,
+    windowExecutionSequence: 0,
     maxItemsReached: false,
     partialManifestPreserved: settings.preservePartialManifest,
     resumable: true,
@@ -613,8 +784,16 @@ async function hydrateRuntimeJobFromDatabase(jobId: string): Promise<RuntimeFetc
     const metadata = persisted.metadata;
     const items = persisted.items;
     const windows: RuntimeFetchWindow[] = persisted.windows.map((window) => ({ ...window, pageStart: 1 }));
+    const startedWindows = windows
+      .filter((window) => window.startedAt)
+      .sort((a, b) => Date.parse(a.startedAt ?? "") - Date.parse(b.startedAt ?? ""));
+    startedWindows.forEach((window, index) => {
+      window.executionOrder ??= index + 1;
+    });
+    const windowExecutionSequence = Math.max(0, ...windows.map((window) => window.executionOrder ?? 0));
     const pageAttempts = persisted.pageAttempts;
     const coverage = persisted.snapshot.coverage;
+    const settings = resolveChannelFetchSettings(persisted.settings).settings;
 
     // Hydration is the bridge that makes a database checkpoint executable again
     // after a page refresh, server restart, or Vercel redeploy. Only temporary
@@ -625,7 +804,7 @@ async function hydrateRuntimeJobFromDatabase(jobId: string): Promise<RuntimeFetc
       sourceKey: sourceKeyForAnalysis(analysis),
       attemptNumber: persisted.snapshot.attemptNumber,
       analysis,
-      settings: persisted.settings,
+      settings,
       metadata,
       status: persisted.snapshot.status,
       completenessStatus: persisted.snapshot.completenessStatus,
@@ -640,6 +819,8 @@ async function hydrateRuntimeJobFromDatabase(jobId: string): Promise<RuntimeFetc
       duplicateCount: Number(jobRecord.duplicateCount),
       cappedWindowCount: jobRecord.cappedWindowCount,
       failedWindowCount: jobRecord.failedWindowCount,
+      lastWorkerCount: Number(persisted.snapshot.progress.currentConcurrentWorkers ?? 0),
+      windowExecutionSequence,
       maxItemsReached: persisted.snapshot.status === "max_items_reached",
       partialManifestPreserved: true,
       resumable: jobRecord.resumable,
@@ -687,122 +868,34 @@ export async function processNextChannelFetchChunk(jobId: string, signal?: Abort
   job.status = "running";
   job.updatedAt = nowIso();
 
-  const window = job.windows.find((candidate) => candidate.status === "running") ?? job.windows.find((candidate) => candidate.status === "pending");
-  if (!window) {
-    maybeFinishWhenNoPending(job);
-    return persistedSnapshot(job);
-  }
-
   if (job.pagesFetched >= job.settings.maxTotalPages) {
     finishJob(job, "partial");
     return persistedSnapshot(job);
   }
 
-  if (job.windowsProcessed >= job.settings.maxWindows && window.status === "pending") {
+  if (job.windowsProcessed >= job.settings.maxWindows && !job.windows.some((window) => window.status === "running")) {
     finishJob(job, "partial");
     return persistedSnapshot(job);
   }
 
-  window.status = "running";
-  window.startedAt ??= nowIso();
-  job.currentWindowId = window.id;
+  const concurrency = effectiveWindowConcurrency(job);
+  const selectedWindows = selectWindowsForChunk(job, concurrency);
+  job.lastWorkerCount = selectedWindows.length;
+  job.currentWindowId = selectedWindows[0]?.id ?? null;
 
-  const pageNumber = window.nextPageToFetch;
-  const requestParams = requestWindowParams(window);
-  const attempt: FetchPageAttemptSummary = {
-    id: crypto.randomUUID(),
-    fetchWindowId: window.id,
-    pageNumber,
-    limit: job.settings.pageSize,
-    requestParams: { page: pageNumber, limit: job.settings.pageSize, ...requestParams },
-    status: "success",
-    itemsReturned: 0,
-    uniqueItemsAdded: 0,
-    duplicateItemsFound: 0,
-    hasMore: false,
-    requestedAt: nowIso(),
-    completedAt: null,
-  };
-
-  const page = await fetchDailymotionChannelPage(job.analysis.apiPath, pageNumber, job.settings.pageSize, signal, requestParams);
-  attempt.completedAt = nowIso();
-
-  if (!page.ok || !page.data) {
-    attempt.status = page.reason === "rate_limited" ? "rate_limited" : page.reason === "unauthorized" ? "auth_or_provider_limited" : "failed";
-    window.status = page.reason === "unauthorized" ? "failed" : "failed";
-    window.errorMessage = page.error ?? "Dailymotion page request failed.";
-    window.completedAt = nowIso();
-    job.failedWindowCount += 1;
-    job.lastError = window.errorMessage;
-    job.status = page.reason === "unauthorized" ? "auth_or_provider_limited" : page.reason === "rate_limited" ? "provider_limited" : "failed";
-    job.pageAttempts.push(attempt);
-    job.updatedAt = nowIso();
+  if (selectedWindows.length === 0) {
+    maybeFinishWhenNoPending(job);
     return persistedSnapshot(job);
   }
 
-  attempt.itemsReturned = page.data.items.length;
-  attempt.limit = page.data.limit;
-  attempt.requestParams = { page: pageNumber, limit: page.data.limit, ...requestParams };
-  attempt.hasMore = page.data.hasMore;
-  const merge = mergeVideos(job, page.data.items, {
-    window,
-    pageAttemptId: attempt.id,
-    pageNumber,
-    collectedAt: attempt.completedAt ?? nowIso(),
-  });
-  attempt.uniqueItemsAdded = merge.uniqueAdded;
-  attempt.duplicateItemsFound = merge.duplicates;
-  job.pageAttempts.push(attempt);
+  // Each chunk is deliberately bounded by CHANNEL_FETCH_MAX_CONCURRENCY and
+  // maxTotalPages. This gives yearly/monthly backfills real parallelism while
+  // keeping Vercel route invocations short and resume-safe.
+  await Promise.all(selectedWindows.map((window) => processWindowPage(job, window, signal)));
 
-  window.pagesFetched += 1;
-  window.itemsFound += page.data.items.length;
-  window.uniqueItemsAdded += merge.uniqueAdded;
-  window.duplicateItemsFound += merge.duplicates;
-  window.hasMoreAtEnd = page.data.hasMore;
-  job.pagesFetched += 1;
-  job.lastSuccessfulCheckpoint = `${window.id}:page:${pageNumber}`;
-
-  const reachedAttemptItemLimit = merge.reachedAttemptItemLimit && (merge.stoppedBeforePageEnd || page.data.hasMore);
-  if (reachedAttemptItemLimit) job.maxItemsReached = true;
-
-  const reachedProviderCap = page.data.hasMore && (pageNumber >= providerMaxPage(job.settings.pageSize) || window.itemsFound >= PROVIDER_WINDOW_ITEM_CAP);
-  const reachedJobCaps = job.maxItemsReached || (page.data.hasMore && job.pagesFetched >= job.settings.maxTotalPages);
-
-  if (reachedProviderCap) {
-    window.reachedProviderCap = true;
-    const childWindows = job.settings.autoSplitCappedWindows ? splitWindow(window, job.settings, resolveChannelFetchSettings(job.settings).caps.maxWindowDepth) : [];
-    if (childWindows.length > 0 && job.windows.length + childWindows.length <= job.settings.maxWindows) {
-      window.status = "split";
-      window.completedAt = nowIso();
-      job.windowsProcessed += 1;
-      job.windows.splice(job.windows.indexOf(window) + 1, 0, ...childWindows);
-    } else {
-      window.status = "capped";
-      window.completedAt = nowIso();
-      job.windowsProcessed += 1;
-      job.cappedWindowCount += 1;
-      if (job.settings.stopOnCappedWindow) finishJob(job, "capped");
-    }
-  } else if (page.data.hasMore && !reachedJobCaps) {
-    window.nextPageToFetch = pageNumber + 1;
-  } else if ((page.data.hasMore || merge.stoppedBeforePageEnd) && reachedJobCaps) {
-    // This cursor is the contract between numbered attempts. When a fetch stops
-    // because of user/job caps, the next "Fetch Remaining" attempt should pick
-    // up the same source window at the next auditable API page instead of
-    // replaying completed pages and counting duplicates as progress.
-    window.nextPageToFetch = merge.stoppedBeforePageEnd ? pageNumber : pageNumber + 1;
-    window.status = "stopped";
-    window.completedAt = nowIso();
-    job.windowsProcessed += 1;
-    if (!job.maxItemsReached) finishJob(job, "partial");
-  } else {
-    window.status = "complete";
-    window.completedAt = nowIso();
-    job.windowsProcessed += 1;
-  }
-
-  if (job.maxItemsReached) finishJob(job, "max_items_reached");
-  else maybeFinishWhenNoPending(job);
+  if (!terminalStatus(job.status)) maybeFinishWhenNoPending(job);
+  const stillActiveWindow = job.windows.find((window) => window.status === "running") ?? null;
+  job.currentWindowId = terminalStatus(job.status) ? null : stillActiveWindow?.id ?? null;
 
   job.updatedAt = nowIso();
   if (!terminalStatus(job.status) && job.settings.delayMs > 0) await delay(job.settings.delayMs);
@@ -819,8 +912,13 @@ export async function stopChannelFetchJob(jobId: string) {
   job.stoppedAt = now;
   job.updatedAt = now;
   job.currentWindowId = null;
-  const runningWindow = job.windows.find((window) => window.status === "running");
-  if (runningWindow) runningWindow.status = "pending";
+  job.lastWorkerCount = 0;
+  // Parallel chunks may have more than one running window between browser
+  // polls. Stopping re-queues all of them so Resume Fetch restarts from the
+  // last persisted page cursor instead of treating in-flight windows as done.
+  for (const runningWindow of job.windows.filter((window) => window.status === "running")) {
+    runningWindow.status = "pending";
+  }
   return persistedSnapshot(job);
 }
 

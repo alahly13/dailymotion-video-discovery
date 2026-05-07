@@ -55,6 +55,9 @@ The Channel Explorer should evolve from a simple one-shot fetch UI into a profes
 - The current implementation preserves the existing chunked route model instead of replacing it with a background worker.
 - `/channels`, `/channels/[sourceId]`, and `/channels/[sourceId]/attempts/[attemptId]` are now the saved-channel browser, combined catalog view, and attempt detail view. They are dynamic pages because they read Prisma-backed saved state.
 - Saved-result search now has two layers: a database-backed API for persisted manifest rows and a FlexSearch index over the currently loaded browser result page. Search must remain saved-data-only and must not call Dailymotion.
+- `/channel-explorer` now also has a live loaded-result FlexSearch panel for current attempt results, loaded combined saved manifests, and selected/current attempt scope. Search runs before result filters and never calls Dailymotion.
+- Deep channel fetch chunks can process multiple independent date windows concurrently under server caps, but never process multiple pages from the same window in one chunk. This preserves page-order and resume safety.
+- Window feedback cards are backed by existing `FetchWindow`, `FetchPageAttempt`, `FetchJobEvent`, and `FetchJob.progressJson` data. No schema migration is required for the current feedback/progress implementation.
 - `GEMINI_MODEL` is available as an optional server-only model override; `GEMINI_API_KEY` and `GEMINI_MODEL` must never be mirrored into `NEXT_PUBLIC_*`.
 
 ---
@@ -461,6 +464,8 @@ MAX_CHANNEL_FETCH_PAGE_SIZE="100"
 MAX_CHANNEL_FETCH_PAGES="200"
 CHANNEL_FETCH_DELAY_MS="250"
 CHANNEL_FETCH_MIN_DELAY_MS="100"
+CHANNEL_FETCH_CONCURRENCY="3"
+CHANNEL_FETCH_MAX_CONCURRENCY="5"
 CHANNEL_FETCH_DEFAULT_PROFILE="deep-balanced"
 
 # Temporary operational retention
@@ -485,6 +490,8 @@ Important distinction:
 - Dailymotion `page` limit applies inside one result window.
 - `MAX_CHANNEL_FETCH_TOTAL_PAGES` is the total number of API pages across all windows.
 - `MAX_CHANNEL_FETCH_WINDOWS` is the max number of date windows the job may process.
+- `CHANNEL_FETCH_CONCURRENCY` is the default number of independent date windows a deep fetch chunk may process.
+- `CHANNEL_FETCH_MAX_CONCURRENCY` is the server hard cap for independent date-window workers and should remain small for Vercel/runtime safety.
 
 ---
 

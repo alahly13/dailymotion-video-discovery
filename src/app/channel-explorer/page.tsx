@@ -8,13 +8,16 @@ import { ChannelFetchConfigPanel } from "@/components/channel-explorer/channel-f
 import { ChannelFetchHistoryPanel } from "@/components/channel-explorer/channel-fetch-history-panel";
 import { ChannelFetchProgress } from "@/components/channel-explorer/channel-fetch-progress";
 import { ChannelInputPanel } from "@/components/channel-explorer/channel-input-panel";
+import { ChannelManifestSearchPanel, type ChannelExplorerSearchScope } from "@/components/channel-explorer/channel-manifest-search-panel";
 import { ChannelManifestSummary } from "@/components/channel-explorer/channel-manifest-summary";
 import { ChannelMetadataPanel } from "@/components/channel-explorer/channel-metadata-panel";
+import { ChannelWindowFeedbackPanel } from "@/components/channel-explorer/channel-window-feedback-panel";
 import { ActiveFilterChips } from "@/components/filters/active-filter-chips";
 import { AdvancedFilterPanel } from "@/components/filters/advanced-filter-panel";
 import { VideoResultsGrid } from "@/components/video/video-results-grid";
 import { applyAdvancedVideoFilters } from "@/lib/filters/apply-advanced-video-filters";
 import { defaultAdvancedVideoFilters } from "@/lib/filters/filter-types";
+import { buildVideoSearchIndex, searchVideoIndex } from "@/lib/search/video-flexsearch";
 import type { ChannelCoverage, ChannelCoverageResponse, ChannelFetchJobSnapshot, ChannelFetchSettings, ChannelFetchStartResponse, ChannelHistoryResponse, ChannelManifestResponse, ChannelMetadataResponse, ChannelPersistenceMode, ChannelSourceMetadata, FetchHistoryEntry, FetchSafetyCaps } from "@/types/channel-fetch";
 import type { AdvancedVideoFilters } from "@/types/filters";
 import type { ChannelManifest } from "@/types/manifest";
@@ -31,6 +34,7 @@ const defaultFetchSettings: ChannelFetchSettings = {
   initialWindowUnit: "year",
   minimumSplitUnit: "month",
   autoSplitCappedWindows: true,
+  concurrency: 3,
   delayMs: 250,
   stopWhenMaxItemsReached: true,
   stopOnCappedWindow: false,
@@ -96,6 +100,10 @@ export default function ChannelExplorerPage() {
   const [fetchSettings, setFetchSettings] = useState<ChannelFetchSettings>(defaultFetchSettings);
   const [filters, setFilters] = useState<AdvancedVideoFilters>(defaultAdvancedVideoFilters);
   const [resultViewMode, setResultViewMode] = useState<ManifestResultViewMode>("combined");
+  const [manifestSearchQuery, setManifestSearchQuery] = useState("");
+  const [manifestSearchScope, setManifestSearchScope] = useState<ChannelExplorerSearchScope>("current");
+  const [manifestSearchExactPhrase, setManifestSearchExactPhrase] = useState(false);
+  const [manifestSearchFuzzy, setManifestSearchFuzzy] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -113,8 +121,29 @@ export default function ChannelExplorerPage() {
     if (resumeJobId) setFetchSettings((current) => ({ ...current, resumeJobId }));
   }, []);
 
-  const selectedManifest = resultViewMode === "current-attempt" ? currentAttemptManifest : combinedManifest ?? currentAttemptManifest;
-  const filteredItems = useMemo(() => applyAdvancedVideoFilters(selectedManifest?.items ?? [], filters), [selectedManifest, filters]);
+  useEffect(() => {
+    if (!safetyCaps) return;
+    setFetchSettings((current) => ({
+      ...current,
+      // The UI mirrors backend concurrency caps for usability, while the route
+      // handler remains authoritative. This prevents a stale browser form from
+      // displaying a worker count the server will never honor.
+      concurrency: Math.min(Math.max(current.concurrency ?? safetyCaps.defaultConcurrency, 1), safetyCaps.maxConcurrency),
+    }));
+  }, [safetyCaps]);
+
+  const selectedManifest = useMemo(() => {
+    if (manifestSearchScope === "combined") return combinedManifest ?? currentAttemptManifest;
+    if (manifestSearchScope === "attempt") return currentAttemptManifest ?? combinedManifest;
+    return currentAttemptManifest ?? combinedManifest;
+  }, [combinedManifest, currentAttemptManifest, manifestSearchScope]);
+  const selectedManifestItems = selectedManifest?.items ?? [];
+  const manifestSearchIndex = useMemo(() => buildVideoSearchIndex(selectedManifestItems), [selectedManifestItems]);
+  const searchedItems = useMemo(
+    () => searchVideoIndex(manifestSearchIndex, manifestSearchQuery, { exactPhrase: manifestSearchExactPhrase, fuzzy: manifestSearchFuzzy, limit: 1000 }),
+    [manifestSearchExactPhrase, manifestSearchFuzzy, manifestSearchIndex, manifestSearchQuery]
+  );
+  const filteredItems = useMemo(() => applyAdvancedVideoFilters(searchedItems, filters), [searchedItems, filters]);
   const groupedAttemptItems = useMemo(() => {
     const groups = new Map<number, NormalizedVideoMetadata[]>();
     for (const item of filteredItems) {
@@ -123,6 +152,11 @@ export default function ChannelExplorerPage() {
     }
     return [...groups.entries()].sort(([a], [b]) => a - b);
   }, [filteredItems, selectedManifest]);
+  const searchSourceLabel = manifestSearchScope === "combined"
+    ? "Combined saved manifest"
+    : manifestSearchScope === "attempt"
+      ? `Selected attempt${selectedManifest?.attemptNumber ? ` #${selectedManifest.attemptNumber}` : ""}`
+      : "Current live results";
 
   function applyJobSnapshot(job: ChannelFetchJobSnapshot) {
     setActiveJob(job);
@@ -334,6 +368,14 @@ export default function ChannelExplorerPage() {
     if (latestResumable) return startFetch(latestResumable.id);
     return startFetch(null, hasSavedAttempts && !coverageComplete);
   };
+  const summaryStats = [
+    ["Reported total", metadata?.reportedTotalFromApi ?? selectedManifest?.totalKnownItems ?? "Unknown"],
+    ["Collected unique", coverage?.collectedUniqueVideos ?? combinedManifest?.items.length ?? currentAttemptManifest?.items.length ?? 0],
+    ["Coverage", coverage?.coveragePercent !== null && coverage?.coveragePercent !== undefined ? `${coverage.coveragePercent.toFixed(2)}%` : coverage?.coverageStatus ?? "Unknown"],
+    ["Current attempt", activeJob?.attemptNumber ? `#${activeJob.attemptNumber}` : history[0]?.attemptNumber ? `#${history[0].attemptNumber}` : "None"],
+    ["Active workers", activeJob?.progress ? `${activeJob.progress.currentConcurrentWorkers}/${activeJob.progress.maxConcurrentWorkers}` : "0/1"],
+    ["Resume", latestResumable || activeJob?.progress.resumable ? "Available" : "Unavailable"],
+  ];
 
   return (
     <div className="space-y-8">
@@ -352,38 +394,48 @@ export default function ChannelExplorerPage() {
       {analysis ? <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4 text-sm font-semibold text-[var(--success)]">Detected: {analysis}</div> : null}
       {error ? <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4 text-sm font-semibold text-[var(--danger)]">{error}</div> : null}
 
+      <div className="grid gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4 text-sm sm:grid-cols-2 lg:grid-cols-6">
+        {summaryStats.map(([label, value]) => (
+          <div key={label}>
+            <p className="text-xs font-semibold uppercase text-[var(--muted-foreground)]">{label}</p>
+            <p className="mt-1 break-words font-black">{value}</p>
+          </div>
+        ))}
+      </div>
+
       <ChannelMetadataPanel metadata={metadata} coverage={coverage} loading={loading} persistence={persistenceMode} persistenceWarning={persistenceWarning} onRefresh={refreshMetadata} />
       <ChannelFetchConfigPanel settings={fetchSettings} safetyCaps={safetyCaps} loading={loading} primaryLabel={primaryFetchLabel} primaryCopy={primaryFetchCopy} hasSavedAttempts={hasSavedAttempts} onChange={setFetchSettings} onStart={runPrimaryFetch} onStartNew={() => startFetch(null, false)} onReset={() => setFetchSettings(defaultFetchSettings)} />
-      <ChannelFetchProgress status={activeJob?.status ?? (loading ? "fetching" : selectedManifest?.fetchStatus ?? "idle")} pagesFetched={activeJob?.progress.pagesFetched ?? selectedManifest?.pagesFetched ?? 0} count={selectedManifest?.items.length ?? 0} total={metadata?.reportedTotalFromApi ?? selectedManifest?.totalKnownItems ?? null} progress={activeJob?.progress ?? null} coverage={coverage} persistence={persistenceMode} persistenceWarning={persistenceWarning} />
+      <ChannelFetchProgress status={activeJob?.status ?? (loading ? "fetching" : selectedManifest?.fetchStatus ?? "idle")} pagesFetched={activeJob?.progress.pagesFetched ?? selectedManifest?.pagesFetched ?? 0} count={filteredItems.length} total={metadata?.reportedTotalFromApi ?? selectedManifest?.totalKnownItems ?? null} progress={activeJob?.progress ?? null} coverage={coverage} persistence={persistenceMode} persistenceWarning={persistenceWarning} />
+      <ChannelWindowFeedbackPanel windows={activeJob?.windows ?? []} recentPageAttempts={activeJob?.recentPageAttempts ?? []} progress={activeJob?.progress ?? null} resumable={Boolean(latestResumable || activeJob?.progress.resumable)} onResume={runPrimaryFetch} />
       <ChannelFetchHistoryPanel history={history} activeJobId={activeJob?.id ?? null} loading={loading} persistence={persistenceMode} persistenceWarning={persistenceWarning} onResume={(jobId) => startFetch(jobId)} />
       <ChannelCoveragePanel coverage={coverage} persistence={persistenceMode} persistenceWarning={persistenceWarning} />
       <ChannelManifestSummary manifest={selectedManifest} persistence={activeJob?.persistence ?? persistenceMode} />
+      <ChannelManifestSearchPanel query={manifestSearchQuery} scope={manifestSearchScope} exactPhrase={manifestSearchExactPhrase} fuzzy={manifestSearchFuzzy} sourceCount={selectedManifestItems.length} matchedCount={searchedItems.length} filteredCount={filteredItems.length} sourceLabel={searchSourceLabel} onQueryChange={setManifestSearchQuery} onScopeChange={setManifestSearchScope} onExactPhraseChange={setManifestSearchExactPhrase} onFuzzyChange={setManifestSearchFuzzy} />
       <AdvancedFilterPanel filters={filters} onChange={setFilters} onReset={() => setFilters(defaultAdvancedVideoFilters)} />
       <ActiveFilterChips filters={filters} />
       <div className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-2xl font-black">Manifest Results</h2>
-            <p className="mt-1 text-sm text-[var(--muted-foreground)]">Search saved results in the selected manifest view. Result filters only search/filter videos already saved in the selected manifest view.</p>
+            <p className="mt-1 text-sm text-[var(--muted-foreground)]">Results render after local manifest search, then result filters, then the selected sort. No search or filter interaction calls Dailymotion.</p>
           </div>
-          <p className="text-sm text-[var(--muted-foreground)]">{filteredItems.length} filtered / {selectedManifest?.items.length ?? 0} original</p>
+          <p className="text-sm text-[var(--muted-foreground)]">{filteredItems.length} shown / {searchedItems.length} searched / {selectedManifest?.items.length ?? 0} collected</p>
         </div>
         <div className="flex flex-wrap gap-2">
           {(["combined", "by-attempt", "current-attempt"] as const).map((mode) => (
-            <button key={mode} type="button" onClick={() => setResultViewMode(mode)} className={`rounded-md border px-3 py-2 text-sm font-bold transition ${resultViewMode === mode ? "border-[var(--accent)] bg-[var(--surface-muted)] text-[var(--foreground)]" : "border-[var(--border)] text-[var(--muted-foreground)]"}`}>
+            <button
+              key={mode}
+              type="button"
+              onClick={() => {
+                setResultViewMode(mode);
+                if (mode === "combined") setManifestSearchScope("combined");
+                if (mode === "current-attempt") setManifestSearchScope("attempt");
+              }}
+              className={`rounded-md border px-3 py-2 text-sm font-bold transition ${resultViewMode === mode ? "border-[var(--accent)] bg-[var(--surface-muted)] text-[var(--foreground)]" : "border-[var(--border)] text-[var(--muted-foreground)]"}`}
+            >
               View: {mode === "combined" ? "Combined Results" : mode === "by-attempt" ? "By Fetch Attempt" : "Current Attempt"}
             </button>
           ))}
-          {metadata?.persistedSourceId ? (
-            <Link href={`/channels/${metadata.persistedSourceId}`} className="rounded-md border border-[var(--border)] px-3 py-2 text-sm font-bold text-[var(--muted-foreground)]">
-              View saved channel page
-            </Link>
-          ) : null}
-          <button type="button" onClick={() => refreshSavedManifest()} className="rounded-md border border-[var(--border)] px-3 py-2 text-sm font-bold text-[var(--muted-foreground)]">Open saved channel manifest</button>
-          <button type="button" onClick={() => exportManifest(combinedManifest ?? selectedManifest, "dailymotion-combined-manifest.json")} className="rounded-md border border-[var(--border)] px-3 py-2 text-sm font-bold text-[var(--muted-foreground)]">Export combined manifest</button>
-          <button type="button" onClick={() => exportManifest(combinedManifest ?? selectedManifest, "dailymotion-combined-manifest.ndjson", "ndjson")} className="rounded-md border border-[var(--border)] px-3 py-2 text-sm font-bold text-[var(--muted-foreground)]">Export combined NDJSON</button>
-          <button type="button" onClick={() => exportManifest(currentAttemptManifest, `dailymotion-attempt-${activeJob?.attemptNumber ?? "latest"}.json`)} className="rounded-md border border-[var(--border)] px-3 py-2 text-sm font-bold text-[var(--muted-foreground)]">Export selected attempt</button>
-          <button type="button" onClick={() => exportManifest(currentAttemptManifest, `dailymotion-attempt-${activeJob?.attemptNumber ?? "latest"}.ndjson`, "ndjson")} className="rounded-md border border-[var(--border)] px-3 py-2 text-sm font-bold text-[var(--muted-foreground)]">Export selected attempt NDJSON</button>
         </div>
       </div>
       {resultViewMode === "by-attempt" ? (
@@ -406,6 +458,26 @@ export default function ChannelExplorerPage() {
       ) : (
         <VideoResultsGrid items={filteredItems} resultViewMode={resultViewMode} />
       )}
+      <div className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4">
+        <div>
+          <h2 className="text-xl font-black">Export / Open Saved Channel Manifest</h2>
+          <p className="mt-1 text-sm leading-6 text-[var(--muted-foreground)]">
+            Exports use the manifest items already loaded in this page state. Opening the saved channel manifest reloads persisted metadata only; it does not start a Dailymotion fetch.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {metadata?.persistedSourceId ? (
+            <Link href={`/channels/${metadata.persistedSourceId}`} className="rounded-md border border-[var(--border)] px-3 py-2 text-sm font-bold text-[var(--muted-foreground)] transition hover:bg-[var(--surface-muted)]">
+              View saved channel page
+            </Link>
+          ) : null}
+          <button type="button" onClick={() => refreshSavedManifest()} className="rounded-md border border-[var(--border)] px-3 py-2 text-sm font-bold text-[var(--muted-foreground)] transition hover:bg-[var(--surface-muted)]">Open saved channel manifest</button>
+          <button type="button" onClick={() => exportManifest(combinedManifest ?? selectedManifest, "dailymotion-combined-manifest.json")} className="rounded-md border border-[var(--border)] px-3 py-2 text-sm font-bold text-[var(--muted-foreground)] transition hover:bg-[var(--surface-muted)]">Export combined manifest</button>
+          <button type="button" onClick={() => exportManifest(combinedManifest ?? selectedManifest, "dailymotion-combined-manifest.ndjson", "ndjson")} className="rounded-md border border-[var(--border)] px-3 py-2 text-sm font-bold text-[var(--muted-foreground)] transition hover:bg-[var(--surface-muted)]">Export combined NDJSON</button>
+          <button type="button" onClick={() => exportManifest(currentAttemptManifest, `dailymotion-attempt-${activeJob?.attemptNumber ?? "latest"}.json`)} className="rounded-md border border-[var(--border)] px-3 py-2 text-sm font-bold text-[var(--muted-foreground)] transition hover:bg-[var(--surface-muted)]">Export selected attempt</button>
+          <button type="button" onClick={() => exportManifest(currentAttemptManifest, `dailymotion-attempt-${activeJob?.attemptNumber ?? "latest"}.ndjson`, "ndjson")} className="rounded-md border border-[var(--border)] px-3 py-2 text-sm font-bold text-[var(--muted-foreground)] transition hover:bg-[var(--surface-muted)]">Export selected attempt NDJSON</button>
+        </div>
+      </div>
       <AiHelperPanel />
     </div>
   );

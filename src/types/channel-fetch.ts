@@ -57,6 +57,7 @@ export interface ChannelFetchSettings {
   initialWindowUnit: TimeWindowUnit;
   minimumSplitUnit: Exclude<TimeWindowUnit, "all">;
   autoSplitCappedWindows: boolean;
+  concurrency: number;
   delayMs: number;
   stopWhenMaxItemsReached: boolean;
   stopOnCappedWindow: boolean;
@@ -74,6 +75,8 @@ export interface FetchSafetyCaps {
   maxPageSize: number;
   defaultDelayMs: number;
   minDelayMs: number;
+  defaultConcurrency: number;
+  maxConcurrency: number;
   defaultProfile: FetchProfile;
   jobTtlHours: number;
   tempManifestTtlHours: number;
@@ -142,6 +145,7 @@ export interface FetchWindowSummary {
   errorMessage: string | null;
   startedAt: string | null;
   completedAt: string | null;
+  executionOrder: number | null;
 }
 
 export interface FetchPageAttemptSummary {
@@ -171,7 +175,14 @@ export interface FetchProgressSummary {
   currentDateWindow: string | null;
   windowsProcessed: number;
   windowsQueued: number;
+  activeWindowCount: number;
+  queuedWindowCount: number;
   windowsCompleted: number;
+  activeWindows: FetchWindowSummary[];
+  currentConcurrentWorkers: number;
+  maxConcurrentWorkers: number;
+  parallelismEnabled: boolean;
+  parallelismReason: string | null;
   itemsCollected: number;
   uniqueItemsCollected: number;
   duplicateCount: number;

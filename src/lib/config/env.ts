@@ -35,6 +35,8 @@ const optionalServerSchema = z.object({
   MAX_CHANNEL_FETCH_PAGE_SIZE: z.coerce.number().int().positive().max(100).default(100),
   CHANNEL_FETCH_DELAY_MS: z.coerce.number().int().nonnegative().default(250),
   CHANNEL_FETCH_MIN_DELAY_MS: z.coerce.number().int().nonnegative().default(100),
+  CHANNEL_FETCH_CONCURRENCY: z.coerce.number().int().positive().default(3),
+  CHANNEL_FETCH_MAX_CONCURRENCY: z.coerce.number().int().positive().max(5).default(5),
   CHANNEL_FETCH_DEFAULT_PROFILE: z
     .enum(["quick-preview", "standard-fetch", "deep-balanced", "deep-aggressive", "recent-sync", "historical-backfill", "custom-expert"])
     .default("deep-balanced"),
@@ -129,9 +131,14 @@ export function getDailymotionConfig() {
 }
 
 export function getFetchSafetyConfig(): FetchSafetyCaps {
+  const maxConcurrency = Math.max(1, optionalServerEnv.CHANNEL_FETCH_MAX_CONCURRENCY);
+  const defaultConcurrency = Math.min(Math.max(1, optionalServerEnv.CHANNEL_FETCH_CONCURRENCY), maxConcurrency);
+
   // These values are server-side hard caps for Dailymotion collection work.
   // Channel Explorer UI settings are only requests; route handlers must clamp
-  // them here so browser state cannot create unlimited or unsafe fetches.
+  // them here so browser state cannot create unlimited or unsafe fetches. The
+  // concurrency pair is server-only because provider pressure and Vercel
+  // duration risk must remain backend-owned, not controlled by client state.
   return {
     legacyMaxPages: optionalServerEnv.MAX_CHANNEL_FETCH_PAGES,
     maxItems: optionalServerEnv.MAX_CHANNEL_FETCH_ITEMS,
@@ -141,6 +148,8 @@ export function getFetchSafetyConfig(): FetchSafetyCaps {
     maxPageSize: optionalServerEnv.MAX_CHANNEL_FETCH_PAGE_SIZE,
     defaultDelayMs: optionalServerEnv.CHANNEL_FETCH_DELAY_MS,
     minDelayMs: optionalServerEnv.CHANNEL_FETCH_MIN_DELAY_MS,
+    defaultConcurrency,
+    maxConcurrency,
     defaultProfile: optionalServerEnv.CHANNEL_FETCH_DEFAULT_PROFILE as FetchProfile,
     jobTtlHours: optionalServerEnv.CHANNEL_FETCH_JOB_TTL_HOURS,
     tempManifestTtlHours: optionalServerEnv.TEMP_MANIFEST_TTL_HOURS,

@@ -18,6 +18,7 @@ const fetchSettingsInputSchema = z
     initialWindowUnit: windowUnitSchema.optional(),
     minimumSplitUnit: minimumWindowUnitSchema.optional(),
     autoSplitCappedWindows: z.boolean().optional(),
+    concurrency: z.coerce.number().int().positive().optional(),
     delayMs: z.coerce.number().int().nonnegative().optional(),
     stopWhenMaxItemsReached: z.boolean().optional(),
     stopOnCappedWindow: z.boolean().optional(),
@@ -61,6 +62,7 @@ function profileDefaults(profile: FetchProfile, caps: FetchSafetyCaps): ChannelF
     initialWindowUnit: "all",
     minimumSplitUnit: "month",
     autoSplitCappedWindows: false,
+    concurrency: profile === "quick-preview" || profile === "standard-fetch" ? 1 : caps.defaultConcurrency,
     delayMs: Math.max(caps.defaultDelayMs, caps.minDelayMs),
     stopWhenMaxItemsReached: true,
     stopOnCappedWindow: false,
@@ -119,6 +121,9 @@ export function resolveChannelFetchSettings(raw: unknown): { settings: ChannelFe
   const maxItems = clamp(input.maxItems, defaults.maxItems, 1, caps.maxItems);
   const maxTotalPages = profile === "quick-preview" ? 1 : clamp(input.maxTotalPages, defaults.maxTotalPages, 1, caps.maxTotalPages);
   const maxWindows = profile === "quick-preview" || profile === "standard-fetch" ? 1 : clamp(input.maxWindows, defaults.maxWindows, 1, caps.maxWindows);
+  const initialWindowUnit = normalizeWindowUnit(input.initialWindowUnit ?? defaults.initialWindowUnit, defaults.initialWindowUnit);
+  const canUseParallelWindows = profile !== "quick-preview" && profile !== "standard-fetch" && initialWindowUnit !== "all";
+  const concurrency = canUseParallelWindows ? clamp(input.concurrency, defaults.concurrency, 1, caps.maxConcurrency) : 1;
   const delayMs = clamp(input.delayMs, defaults.delayMs, caps.minDelayMs, Math.max(caps.defaultDelayMs, caps.minDelayMs, 60_000));
 
   return {
@@ -131,9 +136,13 @@ export function resolveChannelFetchSettings(raw: unknown): { settings: ChannelFe
       pageSize,
       fromDate: cleanDate(input.fromDate) ?? defaults.fromDate,
       toDate: cleanDate(input.toDate) ?? defaults.toDate,
-      initialWindowUnit: normalizeWindowUnit(input.initialWindowUnit ?? defaults.initialWindowUnit, defaults.initialWindowUnit),
+      initialWindowUnit,
       minimumSplitUnit: input.minimumSplitUnit ?? defaults.minimumSplitUnit,
       autoSplitCappedWindows: input.autoSplitCappedWindows ?? defaults.autoSplitCappedWindows,
+      // Parallelism is only enabled for independent date windows. Single-window
+      // and preview profiles remain sequential so resume cursors and page order
+      // stay auditable.
+      concurrency,
       delayMs,
       stopWhenMaxItemsReached: input.stopWhenMaxItemsReached ?? defaults.stopWhenMaxItemsReached,
       stopOnCappedWindow: input.stopOnCappedWindow ?? defaults.stopOnCappedWindow,

@@ -1,5 +1,5 @@
 import { Card } from "@/components/ui/card";
-import type { ChannelPersistenceMode, FetchProgressSummary } from "@/types/channel-fetch";
+import type { ChannelCoverage, ChannelPersistenceMode, FetchProgressSummary } from "@/types/channel-fetch";
 
 export function ChannelFetchProgress({
   status,
@@ -7,6 +7,7 @@ export function ChannelFetchProgress({
   count,
   total,
   progress,
+  coverage,
   persistence,
   persistenceWarning,
 }: {
@@ -15,24 +16,38 @@ export function ChannelFetchProgress({
   count: number;
   total: number | null;
   progress?: FetchProgressSummary | null;
+  coverage?: ChannelCoverage | null;
   persistence: ChannelPersistenceMode;
   persistenceWarning: string | null;
 }) {
   const persistenceLabel = !progress && status === "idle" && !persistenceWarning ? "Not started" : persistence === "database" && !persistenceWarning ? "Persisted" : "Runtime";
+  const collectedUnique = coverage?.collectedUniqueVideos ?? progress?.uniqueItemsCollected ?? count;
+  const estimatedRemaining = coverage?.estimatedRemainingVideos ?? (total !== null ? Math.max(total - collectedUnique, 0) : null);
+  const coveragePercent = coverage?.coveragePercent ?? (total && total > 0 ? Math.min(100, Number(((collectedUnique / total) * 100).toFixed(2))) : null);
   const stats = [
     ["Status", status],
     ["Persistence", persistenceLabel],
+    ["Attempt", progress ? `Attempt #${progress.attemptNumber}` : "None"],
+    ["Page size / limit", progress?.pageSize ?? "100"],
     ["Pages fetched", pagesFetched],
-    ["Videos collected", count],
+    ["Total API requests", progress?.totalApiRequests ?? 0],
+    ["Current page", progress?.currentPageNumber ?? "None"],
+    ["Current date window", progress?.currentDateWindow ?? "None"],
+    ["Visible result cards", count],
+    ["Collected unique videos", collectedUnique],
     ["Reported total", total ?? "Unknown"],
+    ["Estimated remaining", estimatedRemaining ?? "Unknown"],
+    ["Coverage percent", coveragePercent === null ? "Unknown" : `${coveragePercent.toFixed(2)}%`],
     ["Profile", progress?.fetchProfile ?? "None"],
     ["Windows processed", progress?.windowsProcessed ?? 0],
     ["Windows queued", progress?.windowsQueued ?? 0],
+    ["Windows completed", progress?.windowsCompleted ?? 0],
     ["Duplicates", progress?.duplicateCount ?? 0],
     ["Capped windows", progress?.cappedWindowCount ?? 0],
     ["Failed windows", progress?.failedWindowCount ?? 0],
     ["Completeness", progress?.completenessStatus ?? "unknown"],
     ["Resume", progress?.resumable ? "Available" : "Unavailable"],
+    ["Last checkpoint", progress?.lastCheckpoint ?? "None"],
   ];
 
   return (

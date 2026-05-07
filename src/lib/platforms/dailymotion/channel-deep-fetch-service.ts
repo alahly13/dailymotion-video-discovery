@@ -6,6 +6,7 @@ import {
   getLatestPersistedChannelCoverage,
   getPersistedChannelFetchJob,
   getPersistedRuntimeJobData,
+  getPersistedSourceContinuationState,
   listPersistedChannelFetchHistory,
   persistChannelFetchSnapshot,
 } from "@/lib/repositories/channel-fetch-persistence";
@@ -43,6 +44,7 @@ interface RuntimeFetchWindow extends FetchWindowSummary {
 interface RuntimeFetchJob {
   id: string;
   sourceKey: string;
+  attemptNumber: number;
   analysis: DailymotionChannelAnalysis;
   settings: ChannelFetchSettings;
   metadata: ChannelSourceMetadata | null;
@@ -50,6 +52,7 @@ interface RuntimeFetchJob {
   completenessStatus: ChannelFetchCompletenessStatus;
   items: NormalizedVideoMetadata[];
   seenVideoIds: Set<string>;
+  sourceCollectedSeedCount: number;
   windows: RuntimeFetchWindow[];
   pageAttempts: FetchPageAttemptSummary[];
   currentWindowId: string | null;
@@ -154,6 +157,31 @@ function buildWindow(unit: TimeWindowUnit, depth: number, windowStart: string | 
   };
 }
 
+function windowKey(window: Pick<RuntimeFetchWindow, "unit" | "windowStart" | "windowEnd">) {
+  return `${window.unit}:${window.windowStart ?? "open"}:${window.windowEnd ?? "open"}`;
+}
+
+function resumeWindowFromContinuation(window: {
+  unit: TimeWindowUnit;
+  windowStart: string | null;
+  windowEnd: string | null;
+  depth: number;
+  nextPageToFetch: number;
+}) {
+  const nextPage = Math.max(1, window.nextPageToFetch);
+  return {
+    ...buildWindow(window.unit, window.depth, window.windowStart, window.windowEnd),
+    pageStart: nextPage,
+    nextPageToFetch: nextPage,
+  };
+}
+
+function dateWindowLabel(window: FetchWindowSummary | null) {
+  if (!window) return null;
+  if (!window.windowStart && !window.windowEnd) return "All available dates";
+  return `${window.windowStart ?? "open"} -> ${window.windowEnd ?? "open"}`;
+}
+
 function generateWindows(settings: ChannelFetchSettings) {
   if (settings.initialWindowUnit === "all" || settings.fetchProfile === "quick-preview" || settings.fetchProfile === "standard-fetch") {
     return [buildWindow("all", 0, null, null)];
@@ -206,27 +234,63 @@ function requestWindowParams(window: RuntimeFetchWindow) {
   return params;
 }
 
-function mergeVideos(job: RuntimeFetchJob, videos: NormalizedVideoMetadata[]) {
+function mergeVideos(
+  job: RuntimeFetchJob,
+  videos: NormalizedVideoMetadata[],
+  context: {
+    window: RuntimeFetchWindow;
+    pageAttemptId: string;
+    pageNumber: number;
+    collectedAt: string;
+  }
+) {
   let uniqueAdded = 0;
   let duplicates = 0;
+  let processedVideos = 0;
 
   for (const video of videos) {
+    processedVideos += 1;
     if (job.seenVideoIds.has(video.id)) {
       duplicates += 1;
       continue;
     }
     job.seenVideoIds.add(video.id);
-    job.items.push(video);
+    job.items.push({
+      ...video,
+      collectionProvenance: {
+        sourceId: null,
+        sourceName: job.metadata?.displayName ?? job.metadata?.username ?? job.metadata?.handle ?? null,
+        sourceHandle: job.metadata?.handle ?? job.metadata?.username ?? null,
+        sourceExternalId: job.metadata?.externalSourceId ?? job.analysis.resolvedIdentifier,
+        manifestId: job.id,
+        manifestLabel: `Attempt #${job.attemptNumber}`,
+        manifestScope: "attempt",
+        fetchJobId: job.id,
+        attemptNumber: job.attemptNumber,
+        fetchProfile: job.settings.fetchProfile,
+        fetchStatus: job.status,
+        fetchWindowId: context.window.id,
+        pageAttemptId: context.pageAttemptId,
+        pageNumber: context.pageNumber,
+        windowStart: context.window.windowStart,
+        windowEnd: context.window.windowEnd,
+        collectedAt: context.collectedAt,
+        firstSeenInManifestAt: context.collectedAt,
+        duplicateStatus: "new_in_attempt",
+      },
+    });
     uniqueAdded += 1;
     if (job.items.length >= job.settings.maxItems && job.settings.stopWhenMaxItemsReached) break;
   }
 
   job.duplicateCount += duplicates;
-  if (job.items.length >= job.settings.maxItems && job.settings.stopWhenMaxItemsReached) {
-    job.maxItemsReached = true;
-  }
 
-  return { uniqueAdded, duplicates };
+  return {
+    uniqueAdded,
+    duplicates,
+    reachedAttemptItemLimit: job.items.length >= job.settings.maxItems && job.settings.stopWhenMaxItemsReached,
+    stoppedBeforePageEnd: processedVideos < videos.length,
+  };
 }
 
 function terminalStatus(status: FetchJobStatus) {
@@ -255,6 +319,7 @@ function calculateCompleteness(job: RuntimeFetchJob): ChannelFetchCompletenessSt
   if (job.status === "auth_or_provider_limited") return "auth_or_provider_limited";
   if (job.cappedWindowCount > 0) return "capped";
   if (job.failedWindowCount > 0) return "partial";
+  if (job.windows.some((window) => window.status === "stopped" || window.status === "failed")) return "partial";
   if (job.windows.some((window) => window.status === "pending" || window.status === "running")) return "partial";
   if (job.windows.length > 0 && job.windows.every((window) => window.status === "complete" || window.status === "split")) return "complete";
   return "unknown";
@@ -269,7 +334,7 @@ function coverageConfidence(status: ChannelFetchCompletenessStatus, reportedTota
 
 function buildCoverage(job: RuntimeFetchJob): ChannelCoverage {
   const reportedTotal = job.metadata?.reportedTotalFromApi ?? null;
-  const collected = job.items.length;
+  const collected = job.sourceCollectedSeedCount + job.items.length;
   const estimatedRemaining = reportedTotal !== null ? Math.max(reportedTotal - collected, 0) : null;
   const coveragePercent = reportedTotal && reportedTotal > 0 ? Math.min(100, Number(((collected / reportedTotal) * 100).toFixed(2))) : null;
   const pendingWindowCount = job.windows.filter((window) => window.status === "pending" || window.status === "running").length;
@@ -316,6 +381,8 @@ function buildManifest(job: RuntimeFetchJob): ChannelManifest {
     fetchSettings: job.settings,
     sourceMetadata: job.metadata,
     fetchJobId: job.id,
+    manifestScope: "attempt",
+    attemptNumber: job.attemptNumber,
     isComplete: completenessStatus === "complete",
     isPartial: completenessStatus !== "complete",
   });
@@ -325,6 +392,7 @@ function buildHistoryEntry(job: RuntimeFetchJob): FetchHistoryEntry {
   return {
     id: job.id,
     sourceKey: job.sourceKey,
+    attemptNumber: job.attemptNumber,
     fetchProfile: job.settings.fetchProfile,
     status: job.status,
     completenessStatus: calculateCompleteness(job),
@@ -332,7 +400,10 @@ function buildHistoryEntry(job: RuntimeFetchJob): FetchHistoryEntry {
     completedAt: job.completedAt,
     stoppedAt: job.stoppedAt,
     updatedAt: job.updatedAt,
+    manifestId: job.id,
+    itemsCollected: job.items.length + job.duplicateCount,
     uniqueItemsCollected: job.items.length,
+    duplicateCount: job.duplicateCount,
     pagesFetched: job.pagesFetched,
     windowsProcessed: job.windowsProcessed,
     cappedWindowCount: job.cappedWindowCount,
@@ -347,18 +418,25 @@ function buildHistoryEntry(job: RuntimeFetchJob): FetchHistoryEntry {
 function buildProgress(job: RuntimeFetchJob) {
   const currentWindow = job.currentWindowId ? job.windows.find((window) => window.id === job.currentWindowId) ?? null : null;
   return {
+    attemptNumber: job.attemptNumber,
     fetchProfile: job.settings.fetchProfile,
     status: job.status,
     completenessStatus: calculateCompleteness(job),
+    pageSize: job.settings.pageSize,
     pagesFetched: job.pagesFetched,
+    totalApiRequests: job.pageAttempts.length,
+    currentPageNumber: currentWindow?.nextPageToFetch ?? null,
+    currentDateWindow: dateWindowLabel(currentWindow),
     windowsProcessed: job.windowsProcessed,
     windowsQueued: job.windows.filter((window) => window.status === "pending" || window.status === "running").length,
+    windowsCompleted: job.windows.filter((window) => window.status === "complete").length,
     itemsCollected: job.items.length + job.duplicateCount,
     uniqueItemsCollected: job.items.length,
     duplicateCount: job.duplicateCount,
     cappedWindowCount: job.cappedWindowCount,
     failedWindowCount: job.failedWindowCount,
     currentWindow,
+    lastCheckpoint: job.lastSuccessfulCheckpoint,
     maxItemsReached: job.maxItemsReached,
     partialManifestPreserved: job.partialManifestPreserved,
     resumable: job.resumable,
@@ -370,6 +448,7 @@ function snapshot(job: RuntimeFetchJob): ChannelFetchJobSnapshot {
   return {
     id: job.id,
     sourceKey: job.sourceKey,
+    attemptNumber: job.attemptNumber,
     status: job.status,
     completenessStatus: job.completenessStatus,
     settings: job.settings,
@@ -437,7 +516,8 @@ function maybeFinishWhenNoPending(job: RuntimeFetchJob) {
 
   const unfinished = job.windows.some((window) => window.status === "pending" || window.status === "running");
   if (!unfinished) {
-    finishJob(job, job.cappedWindowCount > 0 ? "capped" : job.failedWindowCount > 0 ? "partial" : "complete");
+    const stoppedOrFailedWindow = job.windows.some((window) => window.status === "stopped" || window.status === "failed");
+    finishJob(job, job.cappedWindowCount > 0 ? "capped" : job.failedWindowCount > 0 || stoppedOrFailedWindow ? "partial" : "complete");
   }
 }
 
@@ -472,18 +552,30 @@ export async function startChannelFetchJob(input: string, rawSettings: unknown, 
   const now = nowIso();
   const id = requestId ?? crypto.randomUUID();
   const sourceKey = sourceKeyForAnalysis(analysis);
-  const initialWindows = generateWindows(settings).slice(0, settings.maxWindows);
+  const continuationState = settings.continueFromLatest ? await getPersistedSourceContinuationState(sourceKey) : null;
+  const completedWindowKeys = new Set(continuationState?.completedWindowKeys ?? []);
+  const resumeWindows = (continuationState?.resumeWindows ?? []).map(resumeWindowFromContinuation);
+  const resumeWindowKeys = new Set(resumeWindows.map(windowKey));
+  const plannedWindows = generateWindows(settings)
+    .filter((window) => !completedWindowKeys.has(windowKey(window)))
+    .filter((window) => !resumeWindowKeys.has(windowKey(window)));
+  const initialWindows = [...resumeWindows, ...plannedWindows]
+    .slice(0, settings.maxWindows);
+  const attemptNumber = await nextAttemptNumberForSource(sourceKey);
+  const existingVideoIds = continuationState?.existingVideoIds ?? [];
 
   const job: RuntimeFetchJob = {
     id,
     sourceKey,
+    attemptNumber,
     analysis,
     settings,
     metadata,
     status: "running",
     completenessStatus: "partial",
     items: [],
-    seenVideoIds: new Set(),
+    seenVideoIds: new Set(existingVideoIds),
+    sourceCollectedSeedCount: existingVideoIds.length,
     windows: initialWindows,
     pageAttempts: [],
     currentWindowId: null,
@@ -528,6 +620,7 @@ async function hydrateRuntimeJobFromDatabase(jobId: string): Promise<RuntimeFetc
     return {
       id: jobRecord.id,
       sourceKey: sourceKeyForAnalysis(analysis),
+      attemptNumber: persisted.snapshot.attemptNumber,
       analysis,
       settings: persisted.settings,
       metadata,
@@ -535,6 +628,7 @@ async function hydrateRuntimeJobFromDatabase(jobId: string): Promise<RuntimeFetc
       completenessStatus: persisted.snapshot.completenessStatus,
       items,
       seenVideoIds: new Set(items.map((item) => item.id)),
+      sourceCollectedSeedCount: Math.max(0, coverage.collectedUniqueVideos - items.length),
       windows,
       pageAttempts,
       currentWindowId: jobRecord.currentWindowId,
@@ -562,6 +656,20 @@ async function hydrateRuntimeJobFromDatabase(jobId: string): Promise<RuntimeFetc
 
 function getFetchTtlFallbackHours() {
   return resolveChannelFetchSettings({}).caps.jobTtlHours;
+}
+
+async function nextAttemptNumberForSource(sourceKey: string) {
+  const runtimeAttemptNumbers = [...jobs.values()]
+    .filter((job) => job.sourceKey === sourceKey)
+    .map((job) => job.attemptNumber);
+
+  try {
+    const persisted = await listPersistedChannelFetchHistory(sourceKey, 500);
+    const persistedAttemptNumbers = persisted.map((entry) => entry.attemptNumber);
+    return Math.max(0, ...runtimeAttemptNumbers, ...persistedAttemptNumbers) + 1;
+  } catch {
+    return Math.max(0, ...runtimeAttemptNumbers) + 1;
+  }
 }
 
 export async function processNextChannelFetchChunk(jobId: string, signal?: AbortSignal) {
@@ -603,6 +711,7 @@ export async function processNextChannelFetchChunk(jobId: string, signal?: Abort
     fetchWindowId: window.id,
     pageNumber,
     limit: job.settings.pageSize,
+    requestParams: { page: pageNumber, limit: job.settings.pageSize, ...requestParams },
     status: "success",
     itemsReturned: 0,
     uniqueItemsAdded: 0,
@@ -629,8 +738,15 @@ export async function processNextChannelFetchChunk(jobId: string, signal?: Abort
   }
 
   attempt.itemsReturned = page.data.items.length;
+  attempt.limit = page.data.limit;
+  attempt.requestParams = { page: pageNumber, limit: page.data.limit, ...requestParams };
   attempt.hasMore = page.data.hasMore;
-  const merge = mergeVideos(job, page.data.items);
+  const merge = mergeVideos(job, page.data.items, {
+    window,
+    pageAttemptId: attempt.id,
+    pageNumber,
+    collectedAt: attempt.completedAt ?? nowIso(),
+  });
   attempt.uniqueItemsAdded = merge.uniqueAdded;
   attempt.duplicateItemsFound = merge.duplicates;
   job.pageAttempts.push(attempt);
@@ -643,8 +759,11 @@ export async function processNextChannelFetchChunk(jobId: string, signal?: Abort
   job.pagesFetched += 1;
   job.lastSuccessfulCheckpoint = `${window.id}:page:${pageNumber}`;
 
+  const reachedAttemptItemLimit = merge.reachedAttemptItemLimit && (merge.stoppedBeforePageEnd || page.data.hasMore);
+  if (reachedAttemptItemLimit) job.maxItemsReached = true;
+
   const reachedProviderCap = page.data.hasMore && (pageNumber >= providerMaxPage(job.settings.pageSize) || window.itemsFound >= PROVIDER_WINDOW_ITEM_CAP);
-  const reachedJobCaps = job.maxItemsReached || job.pagesFetched >= job.settings.maxTotalPages;
+  const reachedJobCaps = job.maxItemsReached || (page.data.hasMore && job.pagesFetched >= job.settings.maxTotalPages);
 
   if (reachedProviderCap) {
     window.reachedProviderCap = true;
@@ -663,7 +782,12 @@ export async function processNextChannelFetchChunk(jobId: string, signal?: Abort
     }
   } else if (page.data.hasMore && !reachedJobCaps) {
     window.nextPageToFetch = pageNumber + 1;
-  } else if (page.data.hasMore && reachedJobCaps) {
+  } else if ((page.data.hasMore || merge.stoppedBeforePageEnd) && reachedJobCaps) {
+    // This cursor is the contract between numbered attempts. When a fetch stops
+    // because of user/job caps, the next "Fetch Remaining" attempt should pick
+    // up the same source window at the next auditable API page instead of
+    // replaying completed pages and counting duplicates as progress.
+    window.nextPageToFetch = merge.stoppedBeforePageEnd ? pageNumber : pageNumber + 1;
     window.status = "stopped";
     window.completedAt = nowIso();
     job.windowsProcessed += 1;

@@ -156,6 +156,7 @@ npm run build
 - Result filters only filter and sort videos already collected in the current manifest.
 - Filter changes never trigger Dailymotion API requests.
 - Fetch settings only start API work when the user explicitly starts or resumes a fetch.
+- Dailymotion list requests default to `limit=100`, and server-side validation clamps submitted page size to the provider maximum of 100.
 
 Fetch profiles:
 
@@ -171,12 +172,22 @@ Dailymotion can cap a single result window around 1000 videos. Deep fetch uses p
 
 Channel metadata requests use public profile metadata when available, including `videos_total`. The UI labels this as "Reported total from Dailymotion"; it is not a guaranteed collectable total because private, deleted, unavailable, or geo-restricted videos may affect comparison.
 
+Saved manifests and result viewing:
+
+- Each Dailymotion source has one combined source catalog manifest containing all unique videos collected for that source across numbered attempts.
+- Each fetch attempt still keeps its own attempt manifest/result group, so Attempt #1, Attempt #2, Attempt #3, and later runs remain auditable.
+- "Continue Fetch" / "Fetch Remaining" starts the next numbered attempt from the latest saved checkpoint and merges new unique videos into the same source catalog instead of starting from zero.
+- "Start New Fetch" is separate from continuing. It can collect from the beginning again without deleting the saved combined channel manifest.
+- Result views include "Combined Results", "By Fetch Attempt", and "Current Attempt". Search/filter controls operate only on the selected saved result view and never call Dailymotion.
+- Result cards show compact fetch provenance when available: source, attempt number, fetch profile/status, date window, API page, collected time, duplicate/new status, and manifest relationship.
+- Export controls can download the combined channel manifest or selected attempt as JSON or NDJSON snapshots. Exports include public source/coverage/attempt/video metadata only and must not include secrets or server-only environment values.
+
 Current persistence status:
 
-- When `ENABLE_MANIFEST_PERSISTENCE=true`, Channel Explorer writes source metadata, catalog snapshots, fetch jobs, windows, page attempts, temporary manifests, manifest items, and videos through Prisma/Supabase.
+- When `ENABLE_MANIFEST_PERSISTENCE=true`, Channel Explorer writes source metadata, catalog snapshots, fetch jobs, windows, page attempts, attempt manifests, durable combined source catalog manifests, manifest items, and canonical videos through Prisma/Supabase.
 - Fetch history, coverage, and resumable checkpoints are read from the database and survive browser refreshes, server restarts, and deployment runtime replacement.
 - When DB persistence is disabled or unavailable, the routes fall back to runtime memory and the UI shows "Persistence unavailable: history may reset after restart/deploy."
-- Temporary manifests and fetch jobs have TTL fields; canonical videos, video sources, saved videos, and collections are durable and must not be cleaned up by temporary-history retention.
+- Temporary attempt manifests and fetch jobs have TTL fields; canonical videos, video sources, durable source catalog manifests, saved videos, and collections are durable and must not be cleaned up by temporary-history retention.
 
 New server hard caps:
 

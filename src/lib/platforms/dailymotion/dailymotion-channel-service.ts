@@ -6,7 +6,7 @@ import { fetchDailymotionChannelPage } from "./dailymotion-client";
 const fetchSafety = getFetchSafetyConfig();
 
 export const CHANNEL_FETCH_LIMITS = {
-  pageSize: Math.min(50, fetchSafety.maxPageSize),
+  pageSize: Math.min(100, fetchSafety.maxPageSize),
   maxPages: fetchSafety.legacyMaxPages,
   maxVideos: fetchSafety.maxItems,
   delayMs: fetchSafety.defaultDelayMs,

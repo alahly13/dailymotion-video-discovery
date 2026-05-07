@@ -62,6 +62,7 @@ export interface ChannelFetchSettings {
   stopOnCappedWindow: boolean;
   preservePartialManifest: boolean;
   resumeJobId?: string | null;
+  continueFromLatest?: boolean | null;
 }
 
 export interface FetchSafetyCaps {
@@ -148,6 +149,7 @@ export interface FetchPageAttemptSummary {
   fetchWindowId: string;
   pageNumber: number;
   limit: number;
+  requestParams?: Record<string, string | number | boolean | null> | null;
   status: "success" | "failed" | "rate_limited" | "auth_or_provider_limited" | "canceled";
   itemsReturned: number;
   uniqueItemsAdded: number;
@@ -158,18 +160,25 @@ export interface FetchPageAttemptSummary {
 }
 
 export interface FetchProgressSummary {
+  attemptNumber: number;
   fetchProfile: FetchProfile;
   status: FetchJobStatus;
   completenessStatus: ChannelFetchCompletenessStatus;
+  pageSize: number;
   pagesFetched: number;
+  totalApiRequests: number;
+  currentPageNumber: number | null;
+  currentDateWindow: string | null;
   windowsProcessed: number;
   windowsQueued: number;
+  windowsCompleted: number;
   itemsCollected: number;
   uniqueItemsCollected: number;
   duplicateCount: number;
   cappedWindowCount: number;
   failedWindowCount: number;
   currentWindow: FetchWindowSummary | null;
+  lastCheckpoint: string | null;
   maxItemsReached: boolean;
   partialManifestPreserved: boolean;
   resumable: boolean;
@@ -178,6 +187,7 @@ export interface FetchProgressSummary {
 export interface FetchHistoryEntry {
   id: string;
   sourceKey: string;
+  attemptNumber: number;
   fetchProfile: FetchProfile;
   status: FetchJobStatus;
   completenessStatus: ChannelFetchCompletenessStatus;
@@ -185,7 +195,10 @@ export interface FetchHistoryEntry {
   completedAt: string | null;
   stoppedAt: string | null;
   updatedAt: string;
+  manifestId?: string | null;
+  itemsCollected: number;
   uniqueItemsCollected: number;
+  duplicateCount: number;
   pagesFetched: number;
   windowsProcessed: number;
   cappedWindowCount: number;
@@ -200,6 +213,7 @@ export interface FetchHistoryEntry {
 export interface ChannelFetchJobSnapshot {
   id: string;
   sourceKey: string;
+  attemptNumber: number;
   status: FetchJobStatus;
   completenessStatus: ChannelFetchCompletenessStatus;
   settings: ChannelFetchSettings;
@@ -256,6 +270,16 @@ export interface ChannelHistoryResponse {
 
 export interface ChannelCoverageResponse {
   ok: boolean;
+  coverage: ChannelCoverage | null;
+  persistence: ChannelPersistenceMode;
+  persistenceWarning?: string | null;
+  error?: string;
+}
+
+export interface ChannelManifestResponse {
+  ok: boolean;
+  manifest: ChannelManifest | null;
+  history: FetchHistoryEntry[];
   coverage: ChannelCoverage | null;
   persistence: ChannelPersistenceMode;
   persistenceWarning?: string | null;

@@ -21,6 +21,11 @@ export interface DailymotionRawUser {
 }
 
 type DailymotionParamValue = string | number | boolean | null | undefined;
+const DAILYMOTION_MAX_PAGE_SIZE = 100;
+
+function clampDailymotionLimit(limit: number) {
+  return Math.min(Math.max(Math.trunc(limit), 1), DAILYMOTION_MAX_PAGE_SIZE);
+}
 
 function withTimeout(signal?: AbortSignal) {
   const controller = new AbortController();
@@ -42,8 +47,10 @@ async function fetchList(path: string, params: Record<string, DailymotionParamVa
   try {
     const url = new URL(`${config.baseUrl.replace(/\/$/, "")}${path}`);
     url.searchParams.set("fields", VIDEO_FIELDS);
+    const requestedLimit = clampDailymotionLimit(Number(params.limit ?? DAILYMOTION_MAX_PAGE_SIZE));
+    url.searchParams.set("limit", String(requestedLimit));
     for (const [key, value] of Object.entries(params)) {
-      if (value !== null && value !== undefined && value !== "") url.searchParams.set(key, String(value));
+      if (key !== "limit" && value !== null && value !== undefined && value !== "") url.searchParams.set(key, String(value));
     }
     const response = await fetch(url, { signal: timeout.combinedSignal, headers, cache: "no-store" });
     const status = response.status;
@@ -52,15 +59,15 @@ async function fetchList(path: string, params: Record<string, DailymotionParamVa
     if (!response.ok) return { ok: false, data: null, error: `Dailymotion request failed (${status}).`, reason: "unavailable", status };
     const data = (await response.json()) as DailymotionListResponse;
     if (data.error?.message) return { ok: false, data: null, error: data.error.message, reason: "invalid_response", status };
-    return { ok: true, data: { items: normalizeDailymotionVideos(data.list ?? []), page: data.page ?? Number(params.page ?? 1), limit: data.limit ?? Number(params.limit ?? 50), total: data.total ?? null, hasMore: data.has_more === true }, error: null, reason: null, status };
+    return { ok: true, data: { items: normalizeDailymotionVideos(data.list ?? []), page: data.page ?? Number(params.page ?? 1), limit: data.limit ?? requestedLimit, total: data.total ?? null, hasMore: data.has_more === true }, error: null, reason: null, status };
   } catch (error) {
     const aborted = error instanceof DOMException && error.name === "AbortError";
     return { ok: false, data: null, error: aborted ? "Dailymotion request timed out or was canceled." : "Dailymotion network error.", reason: "network_error", status: 503 };
   } finally { timeout.clear(); }
 }
 
-export function searchDailymotionVideos(query: string, page = 1, limit = 50, signal?: AbortSignal) { return fetchList("/videos", { search: query, page, limit, sort: "recent" }, signal); }
-export function fetchDailymotionChannelPage(apiPath: string, page = 1, limit = 50, signal?: AbortSignal, params: Record<string, DailymotionParamValue> = {}) {
+export function searchDailymotionVideos(query: string, page = 1, limit = DAILYMOTION_MAX_PAGE_SIZE, signal?: AbortSignal) { return fetchList("/videos", { search: query, page, limit, sort: "recent" }, signal); }
+export function fetchDailymotionChannelPage(apiPath: string, page = 1, limit = DAILYMOTION_MAX_PAGE_SIZE, signal?: AbortSignal, params: Record<string, DailymotionParamValue> = {}) {
   return fetchList(apiPath, { page, limit, sort: "recent", ...params }, signal);
 }
 

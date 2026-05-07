@@ -1,7 +1,7 @@
 import type { NormalizedVideoMetadata } from "@/types/video";
 import { VideoCard } from "./video-card";
 
-export function VideoResultsGrid({ items }: { items: NormalizedVideoMetadata[] }) {
+export function VideoResultsGrid({ items, resultViewMode = "combined" }: { items: NormalizedVideoMetadata[]; resultViewMode?: "combined" | "by-attempt" | "current-attempt" }) {
   if (items.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-[var(--border)] bg-[var(--surface)] p-10 text-center text-sm text-[var(--muted-foreground)]">
@@ -13,7 +13,7 @@ export function VideoResultsGrid({ items }: { items: NormalizedVideoMetadata[] }
   return (
     <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
       {items.map((video) => (
-        <VideoCard key={video.id} video={video} />
+        <VideoCard key={video.id} video={video} resultViewMode={resultViewMode} />
       ))}
     </div>
   );

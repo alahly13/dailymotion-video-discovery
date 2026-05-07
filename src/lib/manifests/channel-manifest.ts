@@ -19,6 +19,8 @@ export function createChannelManifest(args: {
   fetchSettings?: ChannelFetchSettings | null;
   sourceMetadata?: ChannelSourceMetadata | null;
   fetchJobId?: string | null;
+  manifestScope?: "combined" | "attempt" | "runtime";
+  attemptNumber?: number | null;
   isComplete?: boolean;
   isPartial?: boolean;
 }): ChannelManifest {
@@ -42,6 +44,8 @@ export function createChannelManifest(args: {
     fetchSettings: args.fetchSettings ?? null,
     sourceMetadata: args.sourceMetadata ?? null,
     fetchJobId: args.fetchJobId ?? null,
+    manifestScope: args.manifestScope ?? "runtime",
+    attemptNumber: args.attemptNumber ?? null,
     isComplete: args.isComplete ?? false,
     isPartial: args.isPartial ?? false,
     createdAt: now,

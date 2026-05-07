@@ -25,7 +25,7 @@ import type {
   FetchWindowSummary,
 } from "@/types/channel-fetch";
 import type { ChannelManifest, ChannelSourceType, ManifestFetchStatus } from "@/types/manifest";
-import type { NormalizedVideoMetadata } from "@/types/video";
+import type { NormalizedVideoMetadata, VideoCollectionProvenance } from "@/types/video";
 
 const PLATFORM = "dailymotion";
 const JOB_TYPE = "channel_deep_fetch";
@@ -35,12 +35,18 @@ const PERSISTENCE_WARNING =
 type PersistedJobWithGraph = Prisma.FetchJobGetPayload<{
   include: {
     source: true;
-    manifest: { include: { items: { include: { video: true } } } };
+    manifest: { include: { items: { include: { video: true; fetchWindow: true } } } };
     windows: true;
     pageAttempts: true;
   };
 }>;
 type PersistedManifestItemWithVideo = NonNullable<PersistedJobWithGraph["manifest"]>["items"][number];
+type PersistedManifestWithGraph = Prisma.ManifestGetPayload<{
+  include: {
+    source: true;
+    items: { include: { video: true; fetchWindow: { include: { fetchJob: true } } } };
+  };
+}>;
 
 function addHours(date: Date, hours: number) {
   const next = new Date(date);
@@ -73,8 +79,31 @@ function numberFromBigInt(value: bigint | number | null | undefined) {
   return typeof value === "bigint" ? Number(value) : value ?? 0;
 }
 
+function jsonObject(value: Prisma.JsonValue | null | undefined) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function attemptNumberFromProgress(value: Prisma.JsonValue | null | undefined) {
+  const progress = jsonObject(value);
+  const attemptNumber = Number(progress?.attemptNumber ?? 0);
+  return Number.isFinite(attemptNumber) && attemptNumber > 0 ? Math.trunc(attemptNumber) : null;
+}
+
+function attemptNumberFromJob(job: Pick<PersistedJobWithGraph, "progressJson">) {
+  return attemptNumberFromProgress(job.progressJson) ?? 1;
+}
+
 function sourceKey(sourceType: string, externalSourceId: string) {
   return `${sourceType}:${externalSourceId}`.toLowerCase();
+}
+
+function explicitSourceKeyParts(value: string) {
+  const match = /^(channel|profile|username|channel_id):(.+)$/i.exec(value.trim());
+  if (!match) return null;
+  return {
+    sourceType: match[1].toLowerCase() as ChannelSourceType,
+    externalSourceId: match[2].trim().toLowerCase(),
+  };
 }
 
 function sourceIdentityFromInput(input: string) {
@@ -192,7 +221,13 @@ function metadataForSource(source: PersistedJobWithGraph["source"]): ChannelSour
   };
 }
 
-function videoFromRecord(video: PersistedManifestItemWithVideo["video"]): NormalizedVideoMetadata {
+function provenanceFromSnapshot(value: Prisma.JsonValue | null | undefined): VideoCollectionProvenance | null {
+  const snapshot = jsonObject(value);
+  const provenance = jsonObject(snapshot?.collectionProvenance as Prisma.JsonValue | null | undefined);
+  return provenance ? provenance as unknown as VideoCollectionProvenance : null;
+}
+
+function videoFromRecord(video: PersistedManifestItemWithVideo["video"], provenance?: VideoCollectionProvenance | null): NormalizedVideoMetadata {
   return {
     id: video.platformVideoId,
     platform: "dailymotion",
@@ -214,14 +249,46 @@ function videoFromRecord(video: PersistedManifestItemWithVideo["video"]): Normal
     tags: video.tags,
     hasThumbnail: video.hasThumbnail,
     hasDescription: video.hasDescription,
+    collectionProvenance: provenance ?? undefined,
     raw: video.rawJson,
   };
+}
+
+function videoFromManifestItem(item: PersistedManifestItemWithVideo, fallbackProvenance?: Partial<VideoCollectionProvenance>): NormalizedVideoMetadata {
+  const stored = provenanceFromSnapshot(item.metadataSnapshotJson);
+  const provenance = stored
+    ? { ...stored, ...fallbackProvenance }
+    : {
+        sourceId: null,
+        sourceName: null,
+        sourceHandle: null,
+        sourceExternalId: null,
+        manifestId: item.manifestId,
+        manifestLabel: fallbackProvenance?.manifestLabel ?? null,
+        manifestScope: fallbackProvenance?.manifestScope ?? "attempt",
+        fetchJobId: fallbackProvenance?.fetchJobId ?? null,
+        attemptNumber: fallbackProvenance?.attemptNumber ?? null,
+        fetchProfile: fallbackProvenance?.fetchProfile ?? null,
+        fetchStatus: fallbackProvenance?.fetchStatus ?? null,
+        fetchWindowId: item.fetchWindowId,
+        pageAttemptId: fallbackProvenance?.pageAttemptId ?? null,
+        pageNumber: item.pageNumber,
+        windowStart: fallbackProvenance?.windowStart ?? null,
+        windowEnd: fallbackProvenance?.windowEnd ?? null,
+        collectedAt: iso(item.createdAt),
+        firstSeenInManifestAt: iso(item.firstSeenInManifestAt),
+        duplicateStatus: fallbackProvenance?.duplicateStatus ?? "unknown",
+      } satisfies VideoCollectionProvenance;
+
+  return videoFromRecord(item.video, provenance);
 }
 
 function buildCoverageFromJob(job: PersistedJobWithGraph): ChannelCoverage {
   const source = job.source;
   const reportedTotal = source?.reportedTotalFromApi ?? job.sourceReportedTotalAtEnd ?? job.sourceReportedTotalAtStart ?? null;
-  const collected = Number(job.uniqueItemsCollected);
+  const progress = jsonObject(job.progressJson);
+  const collectedFromProgress = Number(progress?.coverageCollectedUniqueVideos ?? NaN);
+  const collected = Number.isFinite(collectedFromProgress) ? collectedFromProgress : Number(job.uniqueItemsCollected);
   const estimatedRemaining = reportedTotal !== null ? Math.max(reportedTotal - collected, 0) : null;
   const coveragePercent = reportedTotal && reportedTotal > 0 ? Math.min(100, Number(((collected / reportedTotal) * 100).toFixed(2))) : null;
   const pendingWindowCount = job.windows.filter((window) => window.status === FetchWindowStatus.PENDING || window.status === FetchWindowStatus.RUNNING).length;
@@ -273,11 +340,13 @@ function windowSummary(window: PersistedJobWithGraph["windows"][number]): FetchW
 }
 
 function attemptSummary(attempt: PersistedJobWithGraph["pageAttempts"][number]): FetchPageAttemptSummary {
+  const requestParams = jsonObject(attempt.requestParamsJson);
   return {
     id: attempt.id,
     fetchWindowId: attempt.fetchWindowId,
     pageNumber: attempt.pageNumber,
     limit: attempt.limit,
+    requestParams: requestParams as FetchPageAttemptSummary["requestParams"],
     status: channelStatus(attempt.status) as FetchPageAttemptSummary["status"],
     itemsReturned: attempt.itemsReturned,
     uniqueItemsAdded: attempt.uniqueItemsAdded,
@@ -289,9 +358,17 @@ function attemptSummary(attempt: PersistedJobWithGraph["pageAttempts"][number]):
 }
 
 function manifestFromJob(job: PersistedJobWithGraph, metadata: ChannelSourceMetadata | null): ChannelManifest {
+  const attemptNumber = attemptNumberFromJob(job);
   const items = (job.manifest?.items ?? [])
     .sort((a, b) => Number(a.position - b.position))
-    .map((item) => videoFromRecord(item.video));
+    .map((item) => videoFromManifestItem(item, {
+      manifestScope: "attempt",
+      manifestLabel: `Attempt #${attemptNumber}`,
+      fetchJobId: job.id,
+      attemptNumber,
+      fetchProfile: channelStatus(job.fetchProfile).replaceAll("_", "-"),
+      fetchStatus: channelStatus(job.status),
+    }));
   const settings = fromJsonObject<ChannelFetchSettings>(job.settingsJson, {} as ChannelFetchSettings);
   const analysis = sourceIdentityFromInput(job.sourceInput);
   const status = manifestFetchStatus(job.status);
@@ -315,6 +392,8 @@ function manifestFromJob(job: PersistedJobWithGraph, metadata: ChannelSourceMeta
     fetchSettings: Object.keys(settings).length > 0 ? settings : null,
     sourceMetadata: metadata,
     fetchJobId: job.id,
+    manifestScope: "attempt",
+    attemptNumber,
     isComplete: status === "complete",
     isPartial: status !== "complete",
     createdAt: job.createdAt.toISOString(),
@@ -323,13 +402,15 @@ function manifestFromJob(job: PersistedJobWithGraph, metadata: ChannelSourceMeta
   };
 }
 
-function historyEntryFromJob(job: PersistedJobWithGraph): FetchHistoryEntry {
+function historyEntryFromJob(job: PersistedJobWithGraph, attemptNumberOverride?: number): FetchHistoryEntry {
   const checkpoint = lastSuccessfulCheckpointFromJob(job) ?? resumeWindowIdFromJob(job) ?? job.lastCompletedWindowId;
   const identity = job.source ? sourceKey(job.source.sourceType, job.source.externalSourceId) : sourceKeyFromJobInput(job.sourceInput);
+  const attemptNumber = attemptNumberOverride ?? attemptNumberFromJob(job);
 
   return {
     id: job.id,
     sourceKey: identity,
+    attemptNumber,
     fetchProfile: channelStatus(job.fetchProfile).replaceAll("_", "-") as FetchHistoryEntry["fetchProfile"],
     status: channelStatus(job.status),
     completenessStatus: channelStatus(job.coverageStatusAtEnd) as FetchHistoryEntry["completenessStatus"],
@@ -337,7 +418,10 @@ function historyEntryFromJob(job: PersistedJobWithGraph): FetchHistoryEntry {
     completedAt: iso(job.completedAt),
     stoppedAt: iso(job.stoppedAt),
     updatedAt: job.updatedAt.toISOString(),
+    manifestId: job.manifestId,
+    itemsCollected: Number(job.itemsCollected),
     uniqueItemsCollected: Number(job.uniqueItemsCollected),
+    duplicateCount: Number(job.duplicateCount),
     pagesFetched: job.pagesFetched,
     windowsProcessed: job.windowsProcessed,
     cappedWindowCount: job.cappedWindowCount,
@@ -557,12 +641,79 @@ async function upsertVideo(video: NormalizedVideoMetadata, sourceId: string) {
   });
 }
 
+async function ensureSourceCatalogManifest(sourceId: string, sourceInput: string, sourceUrl: string | null, snapshot: ChannelFetchJobSnapshot) {
+  const prisma = getPrismaClient();
+  const existing = await prisma.manifest.findFirst({
+    where: {
+      manifestType: ManifestType.CHANNEL,
+      persistenceType: ManifestPersistenceType.DURABLE,
+      platform: PLATFORM,
+      sourceId,
+      query: "source-catalog",
+    },
+  });
+
+  if (existing) return existing;
+
+  // The durable source catalog manifest is the channel-level collection anchor.
+  // Attempt manifests can expire as operational history, but this combined
+  // manifest keeps unique public metadata discoverable for the same source.
+  return prisma.manifest.create({
+    data: {
+      manifestType: ManifestType.CHANNEL,
+      persistenceType: ManifestPersistenceType.DURABLE,
+      platform: PLATFORM,
+      sourceId,
+      sourceInput,
+      sourceUrl,
+      query: "source-catalog",
+      status: ManifestStatus.PARTIAL,
+      completenessStatus: CoverageStatus.PARTIAL,
+      fetchSettingsJson: toJson({ sourceCatalog: true, createdFromFetchJobId: snapshot.id }),
+      requestId: `source-catalog:${sourceId}`,
+      expiresAt: null,
+    },
+  });
+}
+
+function provenanceForItem(
+  item: NormalizedVideoMetadata,
+  source: Awaited<ReturnType<typeof sourceForSnapshot>>,
+  snapshot: ChannelFetchJobSnapshot,
+  manifestId: string,
+  manifestScope: VideoCollectionProvenance["manifestScope"],
+  manifestLabel: string
+): VideoCollectionProvenance {
+  return {
+    sourceId: source.id,
+    sourceName: source.displayName ?? source.username ?? source.handle ?? null,
+    sourceHandle: source.handle ?? source.username ?? null,
+    sourceExternalId: source.externalSourceId,
+    manifestId,
+    manifestLabel,
+    manifestScope,
+    fetchJobId: snapshot.id,
+    attemptNumber: snapshot.attemptNumber,
+    fetchProfile: snapshot.settings.fetchProfile,
+    fetchStatus: snapshot.status,
+    fetchWindowId: item.collectionProvenance?.fetchWindowId ?? null,
+    pageAttemptId: item.collectionProvenance?.pageAttemptId ?? null,
+    pageNumber: item.collectionProvenance?.pageNumber ?? null,
+    windowStart: item.collectionProvenance?.windowStart ?? null,
+    windowEnd: item.collectionProvenance?.windowEnd ?? null,
+    collectedAt: item.collectionProvenance?.collectedAt ?? new Date().toISOString(),
+    firstSeenInManifestAt: item.collectionProvenance?.firstSeenInManifestAt ?? new Date().toISOString(),
+    duplicateStatus: item.collectionProvenance?.duplicateStatus ?? "new_in_attempt",
+  };
+}
+
 export async function persistChannelFetchSnapshot(snapshot: ChannelFetchJobSnapshot) {
   if (!persistenceEnabled()) return { persistence: "runtime-memory" as const };
 
   const prisma = getPrismaClient();
   const source = await sourceForSnapshot(snapshot);
   const manifestId = snapshot.id;
+  const combinedManifest = await ensureSourceCatalogManifest(source.id, snapshot.manifest.sourceInput, source.canonicalUrl, snapshot);
   const now = new Date();
   const caps = getFetchSafetyConfig();
   const expiresAt = addHours(now, Math.max(caps.jobTtlHours, caps.tempManifestTtlHours));
@@ -627,7 +778,7 @@ export async function persistChannelFetchSnapshot(snapshot: ChannelFetchJobSnaps
       fetchProfile: prismaFetchProfile(snapshot.settings.fetchProfile),
       status: prismaFetchJobStatus(snapshot.status),
       settingsJson: toJson(snapshot.settings),
-      progressJson: toJson(snapshot.progress),
+      progressJson: toJson({ ...snapshot.progress, attemptNumber: snapshot.attemptNumber, coverageCollectedUniqueVideos: snapshot.coverage.collectedUniqueVideos }),
       resumeCursorJson: toJson({
         currentWindowId: snapshot.progress.currentWindow?.id ?? null,
         currentPage: snapshot.progress.currentWindow?.nextPageToFetch ?? null,
@@ -664,7 +815,7 @@ export async function persistChannelFetchSnapshot(snapshot: ChannelFetchJobSnaps
       fetchProfile: prismaFetchProfile(snapshot.settings.fetchProfile),
       status: prismaFetchJobStatus(snapshot.status),
       settingsJson: toJson(snapshot.settings),
-      progressJson: toJson(snapshot.progress),
+      progressJson: toJson({ ...snapshot.progress, attemptNumber: snapshot.attemptNumber, coverageCollectedUniqueVideos: snapshot.coverage.collectedUniqueVideos }),
       resumeCursorJson: toJson({
         currentWindowId: snapshot.progress.currentWindow?.id ?? null,
         currentPage: snapshot.progress.currentWindow?.nextPageToFetch ?? null,
@@ -699,6 +850,7 @@ export async function persistChannelFetchSnapshot(snapshot: ChannelFetchJobSnaps
       message: terminal ? `Channel fetch finished with status ${snapshot.status}.` : `Channel fetch progress persisted with status ${snapshot.status}.`,
       dataJson: toJson({
         status: snapshot.status,
+        attemptNumber: snapshot.attemptNumber,
         fetchProfile: snapshot.settings.fetchProfile,
         pagesFetched: snapshot.progress.pagesFetched,
         windowsProcessed: snapshot.progress.windowsProcessed,
@@ -767,7 +919,7 @@ export async function persistChannelFetchSnapshot(snapshot: ChannelFetchJobSnaps
         fetchJobId: snapshot.id,
         pageNumber: attempt.pageNumber,
         limit: attempt.limit,
-        requestParamsJson: toJson({ page: attempt.pageNumber, limit: attempt.limit }),
+        requestParamsJson: toJson(attempt.requestParams ?? { page: attempt.pageNumber, limit: attempt.limit }),
         status: prismaAttemptStatus(attempt.status),
         itemsReturned: attempt.itemsReturned,
         uniqueItemsAdded: attempt.uniqueItemsAdded,
@@ -778,6 +930,7 @@ export async function persistChannelFetchSnapshot(snapshot: ChannelFetchJobSnaps
       },
       update: {
         status: prismaAttemptStatus(attempt.status),
+        requestParamsJson: toJson(attempt.requestParams ?? { page: attempt.pageNumber, limit: attempt.limit }),
         itemsReturned: attempt.itemsReturned,
         uniqueItemsAdded: attempt.uniqueItemsAdded,
         duplicateItemsFound: attempt.duplicateItemsFound,
@@ -790,6 +943,15 @@ export async function persistChannelFetchSnapshot(snapshot: ChannelFetchJobSnaps
   for (let index = 0; index < snapshot.manifest.items.length; index += 1) {
     const item = snapshot.manifest.items[index];
     const video = await upsertVideo(item, source.id);
+    const attemptProvenance = provenanceForItem(item, source, snapshot, manifestId, "attempt", `Attempt #${snapshot.attemptNumber}`);
+    const combinedProvenance = { ...attemptProvenance, manifestId: combinedManifest.id, manifestScope: "combined" as const, manifestLabel: "Combined Manifest", duplicateStatus: item.collectionProvenance?.duplicateStatus ?? "new_in_attempt" };
+    const attemptSnapshot = { ...item, collectionProvenance: attemptProvenance };
+    const combinedSnapshot = { ...item, collectionProvenance: combinedProvenance };
+
+    // Attempt manifest items preserve the per-run result list, while the
+    // durable combined manifest dedupes every video for this source. Future
+    // agents should not collapse these two links into one table row: the UI
+    // needs both source-wide viewing and attempt-level auditability.
     await prisma.manifestItem.upsert({
       where: {
         manifestId_videoId: {
@@ -800,15 +962,59 @@ export async function persistChannelFetchSnapshot(snapshot: ChannelFetchJobSnaps
       create: {
         manifestId,
         videoId: video.id,
+        fetchWindowId: attemptProvenance.fetchWindowId,
         position: BigInt(index + 1),
-        metadataSnapshotJson: toJson(item),
+        pageNumber: attemptProvenance.pageNumber,
+        metadataSnapshotJson: toJson(attemptSnapshot),
       },
       update: {
+        fetchWindowId: attemptProvenance.fetchWindowId,
         position: BigInt(index + 1),
-        metadataSnapshotJson: toJson(item),
+        pageNumber: attemptProvenance.pageNumber,
+        metadataSnapshotJson: toJson(attemptSnapshot),
+      },
+    });
+
+    await prisma.manifestItem.upsert({
+      where: {
+        manifestId_videoId: {
+          manifestId: combinedManifest.id,
+          videoId: video.id,
+        },
+      },
+      create: {
+        manifestId: combinedManifest.id,
+        videoId: video.id,
+        fetchWindowId: combinedProvenance.fetchWindowId,
+        position: BigInt(index + 1),
+        pageNumber: combinedProvenance.pageNumber,
+        metadataSnapshotJson: toJson(combinedSnapshot),
+      },
+      update: {
+        // Existing combined rows keep their first-seen provenance. Updating the
+        // position only keeps list rendering stable without erasing which
+        // attempt originally discovered the video.
+        position: BigInt(index + 1),
       },
     });
   }
+
+  const combinedUniqueCount = await prisma.manifestItem.count({ where: { manifestId: combinedManifest.id } });
+  await prisma.manifest.update({
+    where: { id: combinedManifest.id },
+    data: {
+      status: prismaManifestStatus(snapshot.manifest.fetchStatus),
+      completenessStatus: prismaCoverageStatus(snapshot.completenessStatus),
+      itemCount: BigInt(combinedUniqueCount),
+      uniqueItemCount: BigInt(combinedUniqueCount),
+      duplicateCount: BigInt(snapshot.progress.duplicateCount),
+      totalPagesFetched: snapshot.progress.pagesFetched,
+      totalWindowsProcessed: snapshot.progress.windowsProcessed,
+      cappedWindowCount: snapshot.progress.cappedWindowCount,
+      failedWindowCount: snapshot.progress.failedWindowCount,
+      completedAt: terminal ? now : null,
+    },
+  });
 
   if (terminal || snapshot.status === "running") {
     await createSourceCatalogSnapshot(source.id, {
@@ -836,7 +1042,7 @@ async function findJobWithGraph(jobId: string): Promise<PersistedJobWithGraph | 
     where: { id: jobId },
     include: {
       source: true,
-      manifest: { include: { items: { include: { video: true } } } },
+      manifest: { include: { items: { include: { video: true, fetchWindow: true } } } },
       windows: { orderBy: [{ createdAt: "asc" }] },
       pageAttempts: { orderBy: [{ requestedAt: "asc" }] },
     },
@@ -858,27 +1064,37 @@ function persistedJobSnapshot(job: PersistedJobWithGraph): ChannelFetchJobSnapsh
   const historyEntry = historyEntryFromJob(job);
   const activeWindowId = resumeWindowIdFromJob(job);
   const currentWindow = activeWindowId ? windows.find((window) => window.id === activeWindowId) ?? null : null;
+  const settings = fromJsonObject<ChannelFetchSettings>(job.settingsJson, {} as ChannelFetchSettings);
+  const attemptNumber = attemptNumberFromJob(job);
 
   return {
     id: job.id,
     sourceKey: job.source ? sourceKey(job.source.sourceType, job.source.externalSourceId) : sourceKeyFromJobInput(job.sourceInput),
+    attemptNumber,
     status: channelStatus(job.status),
     completenessStatus: channelStatus(job.coverageStatusAtEnd) as ChannelFetchJobSnapshot["completenessStatus"],
-    settings: fromJsonObject<ChannelFetchSettings>(job.settingsJson, {} as ChannelFetchSettings),
+    settings,
     metadata,
     progress: {
+      attemptNumber,
       fetchProfile: channelStatus(job.fetchProfile).replaceAll("_", "-") as ChannelFetchSettings["fetchProfile"],
       status: channelStatus(job.status),
       completenessStatus: channelStatus(job.coverageStatusAtEnd) as ChannelFetchJobSnapshot["completenessStatus"],
+      pageSize: settings.pageSize ?? job.pageAttempts.at(-1)?.limit ?? 100,
       pagesFetched: job.pagesFetched,
+      totalApiRequests: job.pageAttempts.length,
+      currentPageNumber: job.currentPage,
+      currentDateWindow: currentWindow?.windowStart || currentWindow?.windowEnd ? `${currentWindow.windowStart ?? "open"} -> ${currentWindow.windowEnd ?? "open"}` : null,
       windowsProcessed: job.windowsProcessed,
       windowsQueued: windows.filter((window) => window.status === "pending" || window.status === "running").length,
+      windowsCompleted: windows.filter((window) => window.status === "complete").length,
       itemsCollected: Number(job.itemsCollected),
       uniqueItemsCollected: Number(job.uniqueItemsCollected),
       duplicateCount: Number(job.duplicateCount),
       cappedWindowCount: job.cappedWindowCount,
       failedWindowCount: job.failedWindowCount,
       currentWindow,
+      lastCheckpoint: coverage.latestSuccessfulCheckpoint,
       maxItemsReached: job.status === FetchJobStatus.MAX_ITEMS_REACHED,
       partialManifestPreserved: true,
       resumable: job.resumable,
@@ -901,14 +1117,13 @@ export async function listPersistedChannelFetchHistory(inputOrSourceKey?: string
 
   if (inputOrSourceKey) {
     const raw = inputOrSourceKey.trim();
-    const parsedKey = raw.includes(":") ? raw.split(":") : null;
-    if (parsedKey && parsedKey.length >= 2) {
-      const [sourceType, ...rest] = parsedKey;
+    const parsedKey = explicitSourceKeyParts(raw);
+    if (parsedKey) {
       sourceFilter = {
         source: {
           platform: PLATFORM,
-          sourceType,
-          externalSourceId: rest.join(":"),
+          sourceType: parsedKey.sourceType,
+          externalSourceId: parsedKey.externalSourceId,
         },
       };
     } else {
@@ -932,7 +1147,7 @@ export async function listPersistedChannelFetchHistory(inputOrSourceKey?: string
     where: { jobType: JOB_TYPE, platform: PLATFORM, ...sourceFilter },
     include: {
       source: true,
-      manifest: { include: { items: { include: { video: true } } } },
+      manifest: { include: { items: { include: { video: true, fetchWindow: true } } } },
       windows: true,
       pageAttempts: true,
     },
@@ -940,14 +1155,212 @@ export async function listPersistedChannelFetchHistory(inputOrSourceKey?: string
     take: limit,
   });
 
-  return jobs.map(historyEntryFromJob);
+  const attemptNumberById = new Map(
+    [...jobs]
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+      .map((job, index) => [job.id, attemptNumberFromProgress(job.progressJson) ?? index + 1])
+  );
+
+  return jobs.map((job) => historyEntryFromJob(job, attemptNumberById.get(job.id)));
+}
+
+async function findSourceByInputOrKey(inputOrSourceKey: string) {
+  const prisma = getPrismaClient();
+  const raw = inputOrSourceKey.trim();
+  const parsedKey = explicitSourceKeyParts(raw);
+  if (parsedKey) {
+    return prisma.videoSource.findUnique({
+      where: {
+        platform_externalSourceId_sourceType: {
+          platform: PLATFORM,
+          sourceType: parsedKey.sourceType,
+          externalSourceId: parsedKey.externalSourceId,
+        },
+      },
+    });
+  }
+
+  const identity = sourceIdentityFromInput(raw);
+  return prisma.videoSource.findUnique({
+    where: {
+      platform_externalSourceId_sourceType: {
+        platform: PLATFORM,
+        sourceType: identity.sourceType,
+        externalSourceId: identity.externalSourceId,
+      },
+    },
+  });
+}
+
+function manifestFromPersistedCatalog(manifest: PersistedManifestWithGraph, history: FetchHistoryEntry[], coverage: ChannelCoverage | null): ChannelManifest {
+  const metadata = manifest.source
+    ? {
+        platform: "dailymotion" as const,
+        sourceType: manifest.source.sourceType,
+        sourceInput: manifest.source.canonicalUrl ?? manifest.source.handle ?? manifest.source.username ?? manifest.source.externalSourceId,
+        externalSourceId: manifest.source.externalSourceId,
+        handle: manifest.source.handle,
+        username: manifest.source.username,
+        displayName: manifest.source.displayName,
+        canonicalUrl: manifest.source.canonicalUrl,
+        thumbnailUrl: manifest.source.thumbnailUrl,
+        avatarUrl: manifest.source.avatarUrl,
+        description: manifest.source.description,
+        country: manifest.source.country,
+        language: manifest.source.language,
+        reportedTotalFromApi: manifest.source.reportedTotalFromApi,
+        reportedTotalFieldName: manifest.source.reportedTotalFieldName,
+        reportedTotalCheckedAt: iso(manifest.source.reportedTotalCheckedAt),
+        metadataJson: manifest.source.metadataJson,
+        metadataUnavailableReason: null,
+        persistedSourceId: manifest.source.id,
+        persistence: "database" as const,
+        persistenceWarning: null,
+      }
+    : null;
+
+  const items = manifest.items
+    .sort((a, b) => Number(a.position - b.position))
+    .map((item) => videoFromManifestItem(item as PersistedManifestItemWithVideo, {
+      manifestScope: "combined",
+      manifestLabel: "Combined Manifest",
+      sourceId: manifest.sourceId,
+      sourceName: manifest.source?.displayName ?? manifest.source?.username ?? manifest.source?.handle ?? null,
+      sourceHandle: manifest.source?.handle ?? manifest.source?.username ?? null,
+      sourceExternalId: manifest.source?.externalSourceId ?? null,
+    }));
+  const analysis = sourceIdentityFromInput(manifest.sourceInput ?? metadata?.sourceInput ?? manifest.source?.externalSourceId ?? "unknown");
+
+  return {
+    id: manifest.id,
+    platform: "dailymotion",
+    sourceType: analysis.sourceType,
+    sourceInput: manifest.sourceInput ?? metadata?.sourceInput ?? "",
+    resolvedChannelId: manifest.source?.externalSourceId ?? null,
+    resolvedChannelName: manifest.source?.displayName ?? manifest.source?.username ?? null,
+    items,
+    fetchStatus: manifestFetchStatus(manifest.status),
+    pagesFetched: manifest.totalPagesFetched,
+    totalKnownItems: manifest.source?.reportedTotalFromApi ?? null,
+    totalWindowsProcessed: manifest.totalWindowsProcessed,
+    cappedWindowCount: manifest.cappedWindowCount,
+    failedWindowCount: manifest.failedWindowCount,
+    duplicateCount: Number(manifest.duplicateCount),
+    completenessStatus: channelStatus(manifest.completenessStatus) as ChannelManifest["completenessStatus"],
+    fetchSettings: null,
+    sourceMetadata: metadata,
+    fetchJobId: history[0]?.id ?? null,
+    manifestScope: "combined",
+    attemptNumber: null,
+    isComplete: coverage?.coverageStatus === "complete",
+    isPartial: coverage?.coverageStatus !== "complete",
+    createdAt: manifest.createdAt.toISOString(),
+    updatedAt: manifest.updatedAt.toISOString(),
+    requestId: manifest.requestId ?? manifest.id,
+  };
+}
+
+export async function getPersistedCombinedChannelManifest(inputOrSourceKey: string) {
+  if (!persistenceEnabled()) return { manifest: null, history: [], coverage: null };
+  const prisma = getPrismaClient();
+  const source = await findSourceByInputOrKey(inputOrSourceKey);
+  if (!source) return { manifest: null, history: [], coverage: null };
+  const [manifest, history, coverage] = await Promise.all([
+    prisma.manifest.findFirst({
+      where: {
+        manifestType: ManifestType.CHANNEL,
+        persistenceType: ManifestPersistenceType.DURABLE,
+        platform: PLATFORM,
+        sourceId: source.id,
+        query: "source-catalog",
+      },
+      include: {
+        source: true,
+        items: {
+          include: { video: true, fetchWindow: { include: { fetchJob: true } } },
+          orderBy: { position: "asc" },
+        },
+      },
+    }),
+    listPersistedChannelFetchHistory(inputOrSourceKey, 100),
+    getLatestPersistedChannelCoverage(inputOrSourceKey),
+  ]);
+
+  return {
+    manifest: manifest ? manifestFromPersistedCatalog(manifest, history, coverage) : null,
+    history,
+    coverage,
+  };
+}
+
+export async function getPersistedSourceContinuationState(inputOrSourceKey: string) {
+  if (!persistenceEnabled()) return null;
+  const prisma = getPrismaClient();
+  const source = await findSourceByInputOrKey(inputOrSourceKey);
+  if (!source) return null;
+  const resumableWindowStatuses = [FetchWindowStatus.PENDING, FetchWindowStatus.RUNNING, FetchWindowStatus.FAILED, FetchWindowStatus.STOPPED];
+  const [videos, completedWindows, latestResumeJob] = await Promise.all([
+    prisma.video.findMany({
+      where: { sourceId: source.id, platform: PLATFORM },
+      select: { platformVideoId: true },
+    }),
+    prisma.fetchWindow.findMany({
+      where: {
+        sourceId: source.id,
+        status: { in: [FetchWindowStatus.COMPLETE, FetchWindowStatus.SPLIT] },
+      },
+      select: {
+        windowStart: true,
+        windowEnd: true,
+        unit: true,
+      },
+    }),
+    prisma.fetchJob.findFirst({
+      where: {
+        sourceId: source.id,
+        platform: PLATFORM,
+        jobType: JOB_TYPE,
+        windows: {
+          some: {
+            status: { in: resumableWindowStatuses },
+          },
+        },
+      },
+      include: {
+        windows: {
+          where: {
+            status: { in: resumableWindowStatuses },
+          },
+          orderBy: [{ createdAt: "asc" }],
+        },
+      },
+      orderBy: { updatedAt: "desc" },
+    }),
+  ]);
+
+  return {
+    sourceId: source.id,
+    existingVideoIds: videos.map((video) => video.platformVideoId),
+    completedWindowKeys: completedWindows.map((window) => `${channelStatus(window.unit)}:${iso(window.windowStart) ?? "open"}:${iso(window.windowEnd) ?? "open"}`),
+    // Continue Fetch creates a new numbered attempt, but the page cursor comes
+    // from the latest unfinished DB window for this same source. This avoids
+    // replaying completed API pages while still keeping each attempt's windows
+    // and page attempts separately auditable.
+    resumeWindows: latestResumeJob?.windows.map((window) => ({
+      unit: channelStatus(window.unit) as FetchWindowSummary["unit"],
+      windowStart: iso(window.windowStart),
+      windowEnd: iso(window.windowEnd),
+      depth: window.depth,
+      nextPageToFetch: Math.max(1, window.nextPageToFetch),
+    })) ?? [],
+  };
 }
 
 export async function getLatestPersistedChannelCoverage(inputOrSourceKey: string): Promise<ChannelCoverage | null> {
   if (!persistenceEnabled()) return null;
   const history = await listPersistedChannelFetchHistory(inputOrSourceKey, 1);
   if (history.length === 0) {
-    const identity = inputOrSourceKey.includes(":") ? null : sourceIdentityFromInput(inputOrSourceKey);
+    const identity = explicitSourceKeyParts(inputOrSourceKey) ? null : sourceIdentityFromInput(inputOrSourceKey);
     const prisma = getPrismaClient();
     const source = identity
       ? await prisma.videoSource.findUnique({

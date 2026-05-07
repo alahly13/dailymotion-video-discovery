@@ -38,6 +38,7 @@ export function ChannelFetchHistoryPanel({
         </h2>
         <p className="mt-1 max-w-3xl text-sm leading-6 text-[var(--muted-foreground)]">
           History tracks fetch runs and resume checkpoints. Result filters only filter the current collected manifest.
+          Fetch attempts are numbered so you can track what was collected in each run.
         </p>
       </div>
 
@@ -55,6 +56,10 @@ export function ChannelFetchHistoryPanel({
             <div key={entry.id} className="grid gap-3 rounded-md border border-[var(--border)] bg-[var(--background-elevated)] p-4 lg:grid-cols-[1fr_auto]">
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                 <div>
+                  <p className="text-xs font-semibold uppercase text-[var(--muted-foreground)]">Attempt</p>
+                  <p className="mt-1 text-sm font-bold">Attempt #{entry.attemptNumber}</p>
+                </div>
+                <div>
                   <p className="text-xs font-semibold uppercase text-[var(--muted-foreground)]">Profile</p>
                   <p className="mt-1 text-sm font-bold">{entry.fetchProfile}</p>
                 </div>
@@ -63,8 +68,12 @@ export function ChannelFetchHistoryPanel({
                   <p className="mt-1 text-sm font-bold">{entry.completenessStatus}</p>
                 </div>
                 <div>
-                  <p className="text-xs font-semibold uppercase text-[var(--muted-foreground)]">Unique / pages</p>
-                  <p className="mt-1 text-sm font-bold">{entry.uniqueItemsCollected} / {entry.pagesFetched}</p>
+                  <p className="text-xs font-semibold uppercase text-[var(--muted-foreground)]">Added / duplicates</p>
+                  <p className="mt-1 text-sm font-bold">{entry.uniqueItemsCollected} / {entry.duplicateCount}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold uppercase text-[var(--muted-foreground)]">Pages</p>
+                  <p className="mt-1 text-sm font-bold">{entry.pagesFetched}</p>
                 </div>
                 <div>
                   <p className="text-xs font-semibold uppercase text-[var(--muted-foreground)]">Windows</p>

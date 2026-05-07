@@ -44,15 +44,23 @@ export function ChannelFetchConfigPanel({
   settings,
   safetyCaps,
   loading,
+  primaryLabel,
+  primaryCopy,
+  hasSavedAttempts,
   onChange,
   onStart,
+  onStartNew,
   onReset,
 }: {
   settings: ChannelFetchSettings;
   safetyCaps: FetchSafetyCaps | null;
   loading: boolean;
+  primaryLabel: string;
+  primaryCopy: string;
+  hasSavedAttempts: boolean;
   onChange: (settings: ChannelFetchSettings) => void;
   onStart: () => void;
+  onStartNew: () => void;
   onReset: () => void;
 }) {
   const expertMode = settings.fetchProfile === "custom-expert";
@@ -73,9 +81,21 @@ export function ChannelFetchConfigPanel({
           </Button>
           <Button type="button" onClick={onStart} disabled={loading}>
             <Play className="h-4 w-4" aria-hidden="true" />
-            Start New Fetch
+            {primaryLabel}
           </Button>
+          {hasSavedAttempts ? (
+            <Button type="button" variant="secondary" onClick={onStartNew} disabled={loading}>
+              <Play className="h-4 w-4" aria-hidden="true" />
+              Start New Fetch
+            </Button>
+          ) : null}
         </div>
+      </div>
+
+      <div className="rounded-md border border-[var(--border)] bg-[var(--surface-muted)] p-3 text-sm leading-6 text-[var(--muted-foreground)]">
+        <p className="font-semibold text-[var(--foreground)]">{primaryCopy}</p>
+        <p>Fetch attempts are numbered so you can track what was collected in each run. Fetch Remaining continues from the last saved checkpoint instead of starting over.</p>
+        {hasSavedAttempts ? <p>Start New Fetch creates a separate new attempt from the beginning and does not delete the saved channel manifest.</p> : null}
       </div>
 
       <div className="rounded-md border border-[var(--border)] bg-[var(--surface-muted)] p-3 text-sm leading-6 text-[var(--muted-foreground)]">

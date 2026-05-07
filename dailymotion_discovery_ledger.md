@@ -2,7 +2,7 @@
 
 Updated: 2026-05-07
 Repo path: `F:\discovery\dailymotion-video-discovery`
-Scope: Project source-of-truth ledger, updated after wiring Channel Explorer database-backed fetch persistence.
+Scope: Project source-of-truth ledger, updated after Channel Explorer page-size, continuation, combined manifest, and provenance hardening.
 
 ## Table of Contents
 
@@ -23,6 +23,102 @@ Scope: Project source-of-truth ledger, updated after wiring Channel Explorer dat
 - [Known Limitations](#known-limitations)
 - [Future Roadmap](#future-roadmap)
 - [Agent Instructions](#agent-instructions)
+
+## 2026-05-07 Channel Explorer page-size, continuation, source catalog, and provenance hardening
+
+**Scope**
+
+- Hardened the Channel Explorer deep-fetch system around Dailymotion's public API `limit=100` maximum, numbered fetch attempts, combined source catalog manifests, result provenance, export modes, and "Continue Fetch" semantics.
+- This entry updates the code truth after inspecting the guide, previous ledgers, README, `.env.example`, Next.js local docs, Dailymotion docs, Prisma schema/migration, Channel Explorer UI, Dailymotion route/service code, manifest code, video result cards, and persistence repository.
+
+**Root cause corrected**
+
+- The page-size risk came from older Dailymotion client/settings paths that allowed smaller implicit defaults and did not make the requested provider `limit` fully visible in page-attempt audit data. Current server settings now default to `pageSize=100`, clamp submitted values to max 100, and pass that value through every channel/deep-fetch page request.
+- A second live-test bug was found in saved-manifest lookup: full URLs contain `https:`, and the repository treated any colon as an internal `sourceType:id` key. URL lookups are now parsed as source URLs unless the prefix is one of the known source key prefixes.
+- Continuation needed a stricter checkpoint contract. Jobs that stop because of max pages/items now advance or preserve the window cursor correctly, and new numbered continuation attempts load the latest unfinished window/page instead of blindly replaying completed pages.
+
+**Files changed for this entry**
+
+- `README.md`
+- `PROJECT_LEDGER.md`
+- `dailymotion_discovery_ledger.md`
+- `src/app/api/dailymotion/channel/manifest/route.ts`
+- `src/app/channel-explorer/page.tsx`
+- `src/components/channel-explorer/channel-fetch-config-panel.tsx`
+- `src/components/channel-explorer/channel-fetch-progress.tsx`
+- `src/components/channel-explorer/channel-fetch-history-panel.tsx`
+- `src/components/channel-explorer/channel-manifest-summary.tsx`
+- `src/components/video/video-card.tsx`
+- `src/components/video/video-results-grid.tsx`
+- `src/lib/manifests/channel-manifest.ts`
+- `src/lib/platforms/dailymotion/channel-deep-fetch-service.ts`
+- `src/lib/platforms/dailymotion/channel-fetch-settings.ts`
+- `src/lib/platforms/dailymotion/dailymotion-channel-service.ts`
+- `src/lib/platforms/dailymotion/dailymotion-client.ts`
+- `src/lib/repositories/channel-fetch-persistence.ts`
+- `src/types/channel-fetch.ts`
+- `src/types/manifest.ts`
+- `src/types/video.ts`
+
+**Page-size and provider request truth**
+
+- `src/lib/platforms/dailymotion/dailymotion-client.ts` now centralizes Dailymotion page-size bounds with max 100 and applies the effective `limit` to channel/search request params.
+- `src/lib/platforms/dailymotion/channel-fetch-settings.ts` defaults fetch profiles to page size 100 and server-clamps submitted values to `MAX_CHANNEL_FETCH_PAGE_SIZE`, which itself cannot exceed 100.
+- Deep-fetch jobs store `pageSize`, per-page `limit`, and full public request params, including `page`, `limit`, `created_after`, and `created_before` when present.
+- Live API smoke test against `https://www.dailymotion.com/channel/news` returned one successful page with 100 videos, `pageSize=100`, `recentPageAttempts[0].limit=100`, and `requestParams.limit=100`.
+
+**Combined source catalog manifest**
+
+- `VideoSource` remains the durable source identity anchor.
+- Each source now has a durable combined manifest with `query="source-catalog"` and `persistenceType=DURABLE`.
+- Attempt manifests remain temporary/auditable per-run result sets.
+- `ManifestItem` rows are written for both the attempt manifest and the combined source catalog manifest. The combined manifest is deduped by `(manifestId, videoId)` and preserves first-seen provenance instead of overwriting the original discovery attempt.
+- `GET /api/dailymotion/channel/manifest` returns the combined catalog, history, coverage, and actual persistence mode; it now works for both internal source keys such as `channel:news` and pasted source URLs.
+
+**Fetch attempts and continuation**
+
+- Fetch attempts are numbered per source and linked to the same `VideoSource`.
+- Attempt summaries include attempt number, settings/profile, status, manifest ID, counts, pages/windows, duplicates, resumability, and checkpoint metadata.
+- "Continue Fetch" / "Fetch Remaining" loads existing source state, combined catalog videos, completed window keys, and latest unfinished window cursors before creating the next numbered attempt.
+- Dedupe uses platform video ID. Existing combined-catalog videos seed the in-memory seen set so duplicates are skipped and counted rather than duplicated.
+- Stop/resume and max-page/max-item checkpoints store the next auditable API page for the active window when possible.
+
+**Progress and UI truth**
+
+- Progress now separates visible result-card count from source-wide collected unique videos and shows reported total, estimated remaining, coverage percent, attempt number, profile, page size, pages fetched, total API requests, current page/window, queued/completed/capped/failed windows, duplicates, status, checkpoint, and resume availability.
+- The primary fetch action is state-aware: "Start Fetch", "Continue Fetch", "Resume Fetch", "Fetching...", or "Refresh / Re-check Channel" depending on saved history, resumability, running state, and coverage status.
+- "Start New Fetch" is a separate secondary action and does not delete the saved combined source catalog.
+- Result modes are "Combined Results", "By Fetch Attempt", and "Current Attempt".
+- Result cards show compact provenance chips for source, attempt, profile/status, window, page, collected time, duplicate/new status, manifest label/scope, and selected view mode.
+- Export controls support combined JSON/NDJSON and selected-attempt JSON/NDJSON snapshots without secrets.
+
+**Database and migration truth**
+
+- Canonical tables for this feature remain `video_sources`, `videos`, `manifests`, `manifest_items`, `fetch_jobs`, `fetch_windows`, `fetch_page_attempts`, `source_catalog_snapshots`, and `fetch_job_events`.
+- No Prisma schema change was required for this hardening. Provenance is stored using existing manifest/video/window/page/job tables plus `metadataSnapshotJson` for rich result-card metadata.
+- Migration created this entry: no.
+- Migration applied this entry: no.
+- `db:apply` run this entry: no.
+- `DATABASE_URL` remains the only database URL. `DIRECT_URL` was not restored.
+
+**Verification**
+
+- `npm run db:validate`: passed with sanitized database metadata only.
+- `npm run db:status`: passed and reported the configured database schema is up to date.
+- `npx prisma validate`: passed.
+- `npx prisma generate`: passed.
+- `npm run typecheck`: passed after clearing stale generated `.next/dev` types from a failed dev-server run.
+- `npm run build`: passed on Next.js 16.2.5.
+- Manual route test: `https://www.dailymotion.com/user/Isulli282` still receives provider failures for public video pages, but the failed page attempt records `limit=100`, `requestParams.limit=100`, attempt history, and database persistence.
+- Manual route test: `https://www.dailymotion.com/channel/news` collected 100 public videos in a single page at `limit=100`, wrote Attempt #4, persisted database history, created a combined manifest with 100 unique items, and returned provenance on the first card (`Attempt #4`, source `news`, page 1, new in attempt, combined manifest).
+- Manual continuation test also verified a public multi-page profile path after rebuilding the patched code: a capped first attempt saved a next-page checkpoint, and Continue Fetch created the next attempt from the saved cursor rather than starting over.
+
+**Known limitations**
+
+- Dailymotion may return 404/failed public metadata/video pages for some pasted sources, including the user's `Isulli282` test source in this environment. The app records the failure honestly and does not claim coverage.
+- Duplicate videos discovered during a later attempt are counted and the already-saved combined card remains available, but duplicate page hits are not rendered as separate duplicate result cards unless a future schema adds an explicit duplicate-hit table.
+- `ManifestItem` stores rich page-attempt provenance in JSON; if operators need indexed querying by page-attempt ID later, add a small Prisma migration for first-class `fetchPageAttemptId` / `fetchJobId` columns on `manifest_items`.
+- Runtime memory fallback remains best-effort only. Production history requires `ENABLE_MANIFEST_PERSISTENCE=true` and a reachable database.
 
 ## 2026-05-07 Channel Explorer Database-Backed Fetch Persistence
 

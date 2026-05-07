@@ -37,6 +37,8 @@ export interface ChannelManifest {
   fetchSettings?: ChannelFetchSettings | null;
   sourceMetadata?: ChannelSourceMetadata | null;
   fetchJobId?: string | null;
+  manifestScope?: "combined" | "attempt" | "runtime";
+  attemptNumber?: number | null;
   isComplete: boolean;
   isPartial: boolean;
   createdAt: string;

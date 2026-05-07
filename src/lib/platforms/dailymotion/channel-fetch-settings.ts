@@ -23,6 +23,7 @@ const fetchSettingsInputSchema = z
     stopOnCappedWindow: z.boolean().optional(),
     preservePartialManifest: z.boolean().optional(),
     resumeJobId: z.string().trim().nullable().optional(),
+    continueFromLatest: z.boolean().nullable().optional(),
   })
   .partial();
 
@@ -65,10 +66,11 @@ function profileDefaults(profile: FetchProfile, caps: FetchSafetyCaps): ChannelF
     stopOnCappedWindow: false,
     preservePartialManifest: true,
     resumeJobId: null,
+    continueFromLatest: null,
   };
 
   if (profile === "quick-preview") {
-    return { ...base, maxItems: Math.min(1000, caps.maxItems), maxTotalPages: 1, maxWindows: 1, pageSize: Math.min(50, caps.maxPageSize), preservePartialManifest: true };
+    return { ...base, maxItems: Math.min(1000, caps.maxItems), maxTotalPages: 1, maxWindows: 1, pageSize: Math.min(100, caps.maxPageSize), preservePartialManifest: true };
   }
 
   if (profile === "standard-fetch") {
@@ -137,6 +139,7 @@ export function resolveChannelFetchSettings(raw: unknown): { settings: ChannelFe
       stopOnCappedWindow: input.stopOnCappedWindow ?? defaults.stopOnCappedWindow,
       preservePartialManifest: input.preservePartialManifest ?? defaults.preservePartialManifest,
       resumeJobId: input.resumeJobId ?? null,
+      continueFromLatest: input.continueFromLatest ?? null,
     },
   };
 }

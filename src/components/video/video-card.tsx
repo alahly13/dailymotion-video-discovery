@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import type { ReactNode } from "react";
 import { CalendarDays, Clock3, ExternalLink, Eye, Languages, UserRound } from "lucide-react";
-import type { NormalizedVideoMetadata } from "@/types/video";
+import type { ManifestResultViewMode, NormalizedVideoMetadata, VideoCollectionProvenance } from "@/types/video";
 import { Card } from "@/components/ui/card";
 import { VideoHoverPreview } from "./video-hover-preview";
 
@@ -31,9 +32,30 @@ function formatDate(value: string | null, year: number | null) {
   return year ? String(year) : "Unknown date";
 }
 
-export function VideoCard({ video }: { video: NormalizedVideoMetadata }) {
+function formatWindow(provenance: VideoCollectionProvenance | undefined) {
+  if (!provenance?.windowStart && !provenance?.windowEnd) return null;
+  const start = provenance.windowStart?.slice(0, 10) ?? "open";
+  const end = provenance.windowEnd?.slice(0, 10) ?? "open";
+  return `Window: ${start} -> ${end}`;
+}
+
+function provenanceBadgeText(provenance: VideoCollectionProvenance | undefined) {
+  if (!provenance) return "Attempt unknown";
+  if (provenance.duplicateStatus === "already_collected") return "Already collected";
+  if (provenance.duplicateStatus === "first_seen_earlier") return "First seen earlier";
+  return provenance.attemptNumber ? `Added in Attempt #${provenance.attemptNumber}` : "First seen";
+}
+
+function Badge({ children }: { children: ReactNode }) {
+  return <span className="rounded-md border border-[var(--border)] bg-[var(--surface-muted)] px-2 py-1 text-[11px] font-bold text-[var(--muted-foreground)]">{children}</span>;
+}
+
+export function VideoCard({ video, resultViewMode = "combined" }: { video: NormalizedVideoMetadata; resultViewMode?: ManifestResultViewMode }) {
   const [preview, setPreview] = useState(false);
   const channel = video.channelName ?? video.ownerName ?? "Unknown channel";
+  const provenance = video.collectionProvenance ? { ...video.collectionProvenance, resultViewMode } : undefined;
+  const sourceLabel = provenance?.sourceName ?? provenance?.sourceHandle ?? channel;
+  const windowLabel = formatWindow(provenance);
   const metadata = [
     { icon: UserRound, label: channel },
     { icon: Eye, label: formatViews(video.views) },
@@ -75,6 +97,20 @@ export function VideoCard({ video }: { video: NormalizedVideoMetadata }) {
               <span className="truncate">{label}</span>
             </span>
           ))}
+        </div>
+        <div className="space-y-2 rounded-md border border-[var(--border)] bg-[var(--surface-muted)] p-3">
+          <p className="text-[11px] font-black uppercase text-[var(--muted-foreground)]">Fetch Provenance</p>
+          <div className="flex flex-wrap gap-2">
+            <Badge>{sourceLabel ? `Source: ${sourceLabel}` : "Source unknown"}</Badge>
+            <Badge>{provenance?.attemptNumber ? `Attempt #${provenance.attemptNumber}` : "Attempt unknown"}</Badge>
+            <Badge>{provenanceBadgeText(provenance)}</Badge>
+            <Badge>{provenance?.fetchProfile ?? "Profile unknown"}</Badge>
+            <Badge>{provenance?.manifestScope === "combined" ? "Combined Manifest" : provenance?.manifestLabel ?? "Attempt Manifest"}</Badge>
+            <Badge>{resultViewMode === "combined" ? "Combined Results" : resultViewMode === "by-attempt" ? "By Fetch Attempt" : "Current Attempt"}</Badge>
+            {windowLabel ? <Badge>{windowLabel}</Badge> : null}
+            {provenance?.pageNumber ? <Badge>Page {provenance.pageNumber}</Badge> : null}
+            {provenance?.collectedAt ? <Badge>Collected {provenance.collectedAt.slice(0, 10)}</Badge> : null}
+          </div>
         </div>
         {video.url ? (
           <a

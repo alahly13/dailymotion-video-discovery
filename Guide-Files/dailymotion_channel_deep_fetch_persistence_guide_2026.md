@@ -53,6 +53,9 @@ The Channel Explorer should evolve from a simple one-shot fetch UI into a profes
 - Fetch history, resume checkpoints, windows, page attempts, manifests, manifest items, source metadata, catalog snapshots, and canonical videos are written to the database.
 - Runtime memory remains a fallback only when persistence is disabled or unavailable; the UI must show the persistence warning in that case.
 - The current implementation preserves the existing chunked route model instead of replacing it with a background worker.
+- `/channels`, `/channels/[sourceId]`, and `/channels/[sourceId]/attempts/[attemptId]` are now the saved-channel browser, combined catalog view, and attempt detail view. They are dynamic pages because they read Prisma-backed saved state.
+- Saved-result search now has two layers: a database-backed API for persisted manifest rows and a FlexSearch index over the currently loaded browser result page. Search must remain saved-data-only and must not call Dailymotion.
+- `GEMINI_MODEL` is available as an optional server-only model override; `GEMINI_API_KEY` and `GEMINI_MODEL` must never be mirrored into `NEXT_PUBLIC_*`.
 
 ---
 

@@ -286,6 +286,98 @@ export interface ChannelManifestResponse {
   error?: string;
 }
 
+export type SavedChannelResultScope = "combined" | "attempt";
+export type SavedChannelSearchMode = "server" | "loaded-index";
+export type SavedChannelSort =
+  | "first_collected"
+  | "newest"
+  | "oldest"
+  | "views_desc"
+  | "duration_desc"
+  | "title_asc";
+
+export interface ChannelSourceSummary {
+  id: string;
+  sourceKey: string;
+  sourceType: string;
+  sourceInput: string;
+  externalSourceId: string;
+  handle: string | null;
+  username: string | null;
+  displayName: string | null;
+  canonicalUrl: string | null;
+  thumbnailUrl: string | null;
+  avatarUrl: string | null;
+  reportedTotalFromApi: number | null;
+  reportedTotalCheckedAt: string | null;
+  collectedUniqueVideos: number;
+  estimatedRemainingVideos: number | null;
+  coveragePercent: number | null;
+  coverageStatus: ChannelFetchCompletenessStatus;
+  coverageConfidence: CoverageConfidence;
+  totalAttempts: number;
+  lastFetchTime: string | null;
+  latestAttemptId: string | null;
+  latestAttemptNumber: number | null;
+  latestAttemptStatus: FetchJobStatus | null;
+  latestResumableAttemptId: string | null;
+  combinedManifestId: string | null;
+  persistence: ChannelPersistenceMode;
+  persistenceWarning?: string | null;
+}
+
+export interface SavedChannelManifestResponse {
+  ok: boolean;
+  source: ChannelSourceSummary | null;
+  manifest: ChannelManifest | null;
+  history: FetchHistoryEntry[];
+  coverage: ChannelCoverage | null;
+  items: NormalizedVideoMetadata[];
+  total: number;
+  limit: number;
+  offset: number;
+  sort: SavedChannelSort;
+  query: string;
+  persistence: ChannelPersistenceMode;
+  persistenceWarning?: string | null;
+  error?: string;
+}
+
+export interface ChannelAttemptDetail {
+  source: ChannelSourceSummary;
+  job: ChannelFetchJobSnapshot;
+  windows: FetchWindowSummary[];
+  pageAttempts: FetchPageAttemptSummary[];
+  items: NormalizedVideoMetadata[];
+}
+
+export interface ChannelAttemptDetailResponse {
+  ok: boolean;
+  attempt: ChannelAttemptDetail | null;
+  persistence: ChannelPersistenceMode;
+  persistenceWarning?: string | null;
+  error?: string;
+}
+
+export interface SavedChannelSearchResponse {
+  ok: boolean;
+  source: ChannelSourceSummary | null;
+  items: NormalizedVideoMetadata[];
+  total: number;
+  limit: number;
+  offset: number;
+  query: string;
+  scope: SavedChannelResultScope;
+  attemptId?: string | null;
+  sort: SavedChannelSort;
+  exactPhrase: boolean;
+  fuzzy: boolean;
+  mode: SavedChannelSearchMode;
+  persistence: ChannelPersistenceMode;
+  persistenceWarning?: string | null;
+  error?: string;
+}
+
 export type DedupeMergeResult = {
   merged: NormalizedVideoMetadata[];
   uniqueAdded: number;

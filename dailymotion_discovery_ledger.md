@@ -2,7 +2,7 @@
 
 Updated: 2026-05-07
 Repo path: `F:\discovery\dailymotion-video-discovery`
-Scope: Project source-of-truth ledger, updated after Channel Explorer page-size, continuation, combined manifest, and provenance hardening.
+Scope: Project source-of-truth ledger, updated after saved channel pages, attempt details, Gemini model env, combined manifest search, and provenance/dedupe hardening.
 
 ## Table of Contents
 
@@ -23,6 +23,67 @@ Scope: Project source-of-truth ledger, updated after Channel Explorer page-size,
 - [Known Limitations](#known-limitations)
 - [Future Roadmap](#future-roadmap)
 - [Agent Instructions](#agent-instructions)
+
+## 2026-05-07 Saved channel browser, attempt detail pages, Gemini model env, and saved-results search
+
+**Scope**
+
+- Added server-only `GEMINI_MODEL` support while preserving the existing safe fallback model `gemini-1.5-flash`. `GEMINI_API_KEY` and `GEMINI_MODEL` remain server-only and are not exposed through `NEXT_PUBLIC_*`.
+- Added `/channels`, `/channels/[sourceId]`, and `/channels/[sourceId]/attempts/[attemptId]` as dynamic App Router pages backed by the existing Prisma Channel Explorer persistence layer.
+- Added saved-history API routes: `GET /api/dailymotion/channel/sources`, `GET /api/dailymotion/channel/[sourceId]/combined-manifest`, `GET /api/dailymotion/channel/[sourceId]/attempts`, `GET /api/dailymotion/channel/attempts/[attemptId]`, and `POST /api/dailymotion/channel/search-saved`.
+- Added `flexsearch@0.8.212` for fast loaded-result browser indexing while keeping saved-result authority in the database.
+
+**Current combined manifest truth**
+
+- The canonical source-level catalog remains the durable `manifests` row where `manifestType=CHANNEL`, `persistenceType=DURABLE`, and `query="source-catalog"`.
+- Attempt manifests remain temporary/auditable per fetch job.
+- Combined catalog rows are still enforced by `@@unique([manifestId, videoId])`.
+- New combined rows now use a source-wide append position and existing combined rows keep first-seen provenance and first-collected ordering when later attempts rediscover the same video.
+- No schema change was required; no migration was created or applied.
+
+**Deduplication truth**
+
+- Provider identity remains authoritative when `platform + platformVideoId` exists.
+- Shared manifest/runtime dedupe now uses a stronger `getVideoDedupeKey`: platform video ID first, then canonical URL, then a conservative fingerprint with normalized title, duration, published date, owner/source IDs, thumbnail URL, and description hash when provider ID is unavailable.
+- The DB layer still persists Dailymotion canonical videos through `videos(platform, platform_video_id)` and combined manifest uniqueness through `manifest_items(manifest_id, video_id)`.
+- Duplicate attempt counts remain visible in fetch history, attempt detail, and provenance chips; clearly different videos are not merged solely by title.
+
+**Saved channel UI**
+
+- `/channels` lists persisted Dailymotion sources with name/handle/source ID, avatar/thumbnail if available, reported total, collected unique count, estimated remaining count, coverage percent/status/confidence, attempt count, latest fetch time, and state-aware fetch action labels.
+- `/channels/[sourceId]` shows source stats, combined saved results, attempt history, server pagination, JSON/NDJSON export for the displayed saved result set, and a FlexSearch-powered loaded-result search mode.
+- `/channels/[sourceId]/attempts/[attemptId]` shows attempt number, source identity, profile/settings, started/completed timestamps, status, resumability, checkpoint, pages, windows, capped/failed windows, duplicate count, timelines, and attempt-scoped videos.
+- `/channel-explorer` now links to `/channels` and can be prefilled from saved pages with a source and optional resumable job ID without auto-fetching.
+
+**Saved-results search**
+
+- `POST /api/dailymotion/channel/search-saved` searches persisted manifest/video rows only; it imports the persistence repository and does not call Dailymotion.
+- Server search covers title, description, owner/channel, language, URL/video ID, tags, year, and exact duration terms, with pagination/sort.
+- The channel page also builds separate FlexSearch indexes over the currently loaded result page for title, owner/channel, description/tags, and low-weight metadata fields including language, year, duration, views, attempt number, profile, and window range.
+- Arabic and English queries were smoke-tested against existing saved data. A UTF-8 Arabic query must be sent as UTF-8 JSON.
+- Current limitation: server search is substring/field search, not full Postgres FTS or trigram fuzzy search. Typo-tolerant suggestion behavior is limited to the loaded FlexSearch index.
+
+**Verification**
+
+- `npm run db:validate`: passed with sanitized `DATABASE_URL` diagnostics and `DATABASE_URL`-only policy.
+- `npm run db:status`: passed; Prisma reported the schema is up to date with the single applied migration.
+- `npx prisma validate`: passed.
+- `npx prisma generate`: passed.
+- `npm run typecheck`: passed.
+- `npm run build`: passed on Next.js 16.2.5 with new dynamic routes.
+- `npm run lint`: still fails because the existing script calls removed `next lint` and Next interprets `lint` as an invalid project directory.
+- Local production server smoke: `http://127.0.0.1:3000/channels` returned 200; `/channel-explorer` returned 200; `/channels/aa2475eb-e3f0-4505-90af-75c97c39ade5` returned 200; `/channels/aa2475eb-e3f0-4505-90af-75c97c39ade5/attempts/ab087469-63d8-44fe-afa8-d970b03303e7` returned 200.
+- API smoke: combined manifest endpoint for source `aa2475eb-e3f0-4505-90af-75c97c39ade5` returned total `100`, first page `5`, history `4`; attempt detail for Attempt #4 returned `100` videos, `0` duplicates, `1` window, `1` page; Attempt #5 returned `0` videos and `100` duplicates skipped.
+- Saved search smoke: English `news` returned total `100`; Arabic `العربية` returned total `1` when posted as UTF-8 JSON.
+- Playwright screenshot smoke with Edge succeeded for `/channels` at desktop viewport and `/channels/[sourceId]` at mobile viewport.
+- A local production server is running on `http://127.0.0.1:3000` using the built app.
+
+**Safety**
+
+- `DATABASE_URL` remains the only database URL. `DIRECT_URL` was not restored.
+- `db:apply` was not run.
+- No `prisma migrate reset`, `prisma db push`, table drops, destructive migration commands, private Dailymotion access, video downloading, scraping, or rehosting were introduced.
+- No secrets were intentionally printed.
 
 ## 2026-05-07 Channel Explorer page-size, continuation, source catalog, and provenance hardening
 
@@ -734,6 +795,7 @@ The app is built around the idea of **AI Public Video Discovery**: use real publ
 - `zod` `4.4.3`
 - `zustand` `5.0.13`
 - `dotenv` `17.4.2`
+- `flexsearch` `0.8.212`
 
 **Platform integrations**
 
@@ -773,8 +835,9 @@ The app is built around the idea of **AI Public Video Discovery**: use real publ
 **Gemini API server-only behavior**
 
 - `GEMINI_API_KEY` is server-only.
+- `GEMINI_MODEL` is server-only and optional.
 - AI routes return controlled error payloads when the key is missing or the API is unavailable.
-- The Gemini helper uses model `gemini-1.5-flash`.
+- The Gemini helper uses `GEMINI_MODEL` when set, otherwise it falls back to `gemini-1.5-flash`.
 
 **Dailymotion API / public metadata behavior**
 
@@ -808,6 +871,7 @@ The app is built around the idea of **AI Public Video Discovery**: use real publ
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Public / browser-safe | Yes | Browser-safe Supabase publishable key. | Supabase project settings. | Build env validation fails if missing. |
 | `DATABASE_URL` | Server-only required | Yes | Canonical Postgres connection string for runtime, Prisma CLI, migration status, migration deploy, client generation, and Prisma Studio. | Supabase Connect page; use the Session Pooler URL. | DB scripts fail if missing or invalid. |
 | `GEMINI_API_KEY` | Server-only required | Yes for AI routes | Enables Gemini-backed AI helper routes. | Google AI Studio or configured provider flow. | AI routes return unavailable/missing-config errors. |
+| `GEMINI_MODEL` | Server-only optional | No | Selects the Gemini model for server AI routes. Never expose through `NEXT_PUBLIC_*`. | Local `.env.local` or Vercel env vars. | Defaults to `gemini-1.5-flash`. |
 | `SUPABASE_SERVICE_ROLE_KEY` | Server-only optional | No | Reserved for privileged server-side Supabase operations. | Supabase project settings. | Not required by visible runtime paths. |
 | `DAILYMOTION_API_BASE_URL` | Server-only optional | No | Base URL for Dailymotion API requests. | Usually keep default. | Defaults to `https://api.dailymotion.com`. |
 | `DAILYMOTION_API_KEY` | Server-only optional | No | Optional Bearer token for Dailymotion endpoints that need auth. | Dailymotion developer account if applicable. | Public metadata fetching still attempts anonymous access. |

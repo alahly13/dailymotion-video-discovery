@@ -5,6 +5,7 @@ import { ThemeToggle } from "./theme-toggle";
 const links = [
   ["Dashboard", "/"],
   ["Channel Explorer", "/channel-explorer"],
+  ["Channels", "/channels"],
   ["Search", "/search"],
   ["AI Search", "/ai-search"],
   ["Saved", "/saved"],

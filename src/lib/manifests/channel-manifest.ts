@@ -2,6 +2,70 @@ import type { ChannelManifest, ChannelSourceType } from "@/types/manifest";
 import type { NormalizedVideoMetadata } from "@/types/video";
 import type { ChannelFetchCompletenessStatus, ChannelFetchSettings, ChannelSourceMetadata } from "@/types/channel-fetch";
 
+function normalizeIdentityText(value: string | null | undefined) {
+  return (value ?? "")
+    .normalize("NFKC")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function stableDescriptionHash(value: string | null | undefined) {
+  const normalized = normalizeIdentityText(value);
+  if (!normalized) return "no-description";
+  let hash = 0;
+  for (let index = 0; index < normalized.length; index += 1) {
+    hash = (hash * 31 + normalized.charCodeAt(index)) >>> 0;
+  }
+  return hash.toString(36);
+}
+
+function canonicalVideoUrl(value: string | null | undefined) {
+  const normalized = normalizeIdentityText(value);
+  if (!normalized) return null;
+  try {
+    const url = new URL(normalized);
+    url.hash = "";
+    url.search = "";
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return normalized.replace(/\/$/, "");
+  }
+}
+
+export function platformVideoIdentityKey(platform: string, platformVideoId: string | null | undefined) {
+  const id = normalizeIdentityText(platformVideoId);
+  return id ? `${normalizeIdentityText(platform)}:${id}` : null;
+}
+
+export function getVideoDedupeKey(item: NormalizedVideoMetadata) {
+  const platformKey = platformVideoIdentityKey(item.platform, item.id);
+  if (platformKey) return `platform-id:${platformKey}`;
+
+  const canonicalUrl = canonicalVideoUrl(item.url);
+  if (canonicalUrl) return `url:${item.platform}:${canonicalUrl}`;
+
+  const title = normalizeIdentityText(item.title);
+  const owner = normalizeIdentityText(item.ownerId ?? item.channelId ?? item.collectionProvenance?.sourceExternalId ?? null);
+  const published = normalizeIdentityText(item.createdAt?.slice(0, 10));
+  const thumbnail = canonicalVideoUrl(item.thumbnail);
+
+  // This fallback is intentionally multi-field and conservative. It only runs
+  // when a provider video ID is absent, and it combines normalized title,
+  // duration, publish date, owner/source, thumbnail, and description hash so
+  // similar titles alone cannot collapse distinct videos.
+  return [
+    "fingerprint",
+    normalizeIdentityText(item.platform),
+    owner || "unknown-owner",
+    title || "untitled",
+    item.duration ?? "unknown-duration",
+    published || "unknown-date",
+    thumbnail ?? "no-thumbnail",
+    stableDescriptionHash(item.description),
+  ].join(":");
+}
+
 export function createChannelManifest(args: {
   sourceType: ChannelSourceType;
   sourceInput: string;
@@ -58,8 +122,9 @@ export function dedupeVideos(items: readonly NormalizedVideoMetadata[]) {
   const seen = new Set<string>();
   const output: NormalizedVideoMetadata[] = [];
   for (const item of items) {
-    if (seen.has(item.id)) continue;
-    seen.add(item.id);
+    const key = getVideoDedupeKey(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
     output.push(item);
   }
   return output;

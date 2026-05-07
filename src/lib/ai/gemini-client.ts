@@ -1,14 +1,24 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { env } from "@/lib/config/env";
 
 export class AiRouteError extends Error {
   constructor(message: string, public status = 503, public reason: string = "unavailable") { super(message); }
 }
 
 function getGeminiModel() {
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) throw new AiRouteError("AI features are currently unavailable because GEMINI_API_KEY is not configured.", 503, "missing_config");
+  let key: string;
+  try {
+    key = env.geminiApiKey;
+  } catch {
+    throw new AiRouteError("AI features are currently unavailable because GEMINI_API_KEY is not configured.", 503, "missing_config");
+  }
+
   const genAI = new GoogleGenerativeAI(key);
-  return genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+  // Gemini model selection belongs on the server with the API key. Future
+  // browser code must not mirror this value into NEXT_PUBLIC_* because model
+  // choice is part of the private AI route configuration surface.
+  return genAI.getGenerativeModel({ model: env.geminiModel });
 }
 
 export async function generateGeminiText(prompt: string) {

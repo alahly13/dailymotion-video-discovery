@@ -9,6 +9,7 @@ const stats = [
 
 const routes = [
   ["Channel Explorer", "/channel-explorer", "Fetch public channel metadata into a filterable manifest."],
+  ["Channels", "/channels", "Review saved fetch attempts and source-level combined manifests."],
   ["Search", "/search", "Prepare global result sets for research review."],
   ["AI Search", "/ai-search", "Use server-side Gemini routes for query and manifest help."],
 ];
@@ -39,7 +40,7 @@ export default function HomePage() {
           ))}
         </div>
       </section>
-      <section className="grid gap-5 md:grid-cols-3">
+      <section className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
         {routes.map(([label, href, description]) => (
           <Card key={href}>
             <h2 className="font-semibold">{label}</h2>

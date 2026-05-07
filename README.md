@@ -27,8 +27,9 @@ Server-only:
 
 - `DATABASE_URL`: required. Use the Supabase Session Pooler connection string.
 - `GEMINI_API_KEY`: required for AI routes.
+- `GEMINI_MODEL`: optional server-only Gemini model override. Leave unset to use the app default (`gemini-1.5-flash`).
 
-Never expose `DATABASE_URL`, `GEMINI_API_KEY`, or service role keys as `NEXT_PUBLIC_*`. Do not create `NEXT_PUBLIC_DATABASE_URL`.
+Never expose `DATABASE_URL`, `GEMINI_API_KEY`, `GEMINI_MODEL`, or service role keys as `NEXT_PUBLIC_*`. Do not create `NEXT_PUBLIC_DATABASE_URL`.
 
 ## Supabase Connection Strategy
 
@@ -146,6 +147,7 @@ npm run build
 
 - `DAILYMOTION_API_KEY` is optional. Public metadata routes run without it where Dailymotion endpoints allow anonymous access.
 - `SUPABASE_SERVICE_ROLE_KEY` is optional and server-only for privileged flows.
+- `GEMINI_MODEL` can select the server-side Gemini model used by AI routes. If it is missing or blank, the code falls back to `gemini-1.5-flash`. The Gemini API key and model setting are never sent to the browser.
 - AI route failures return controlled unavailable payloads when Gemini is not configured or temporarily unavailable.
 
 ## Channel Explorer Deep Fetch
@@ -174,6 +176,9 @@ Channel metadata requests use public profile metadata when available, including 
 
 Saved manifests and result viewing:
 
+- `/channels` lists persisted Dailymotion sources that have fetch attempts, including reported total, collected unique videos, estimated remaining count, coverage status/confidence, attempt count, latest fetch time, and state-aware fetch actions.
+- `/channels/[sourceId]` opens the source-level combined channel catalog plus attempt history. It supports server pagination/search and export of the currently displayed combined manifest page as JSON or NDJSON.
+- `/channels/[sourceId]/attempts/[attemptId]` opens one attempt with settings, status, resume state, pages, windows, checkpoint, duplicate count, and attempt-scoped videos.
 - Each Dailymotion source has one combined source catalog manifest containing all unique videos collected for that source across numbered attempts.
 - Each fetch attempt still keeps its own attempt manifest/result group, so Attempt #1, Attempt #2, Attempt #3, and later runs remain auditable.
 - "Continue Fetch" / "Fetch Remaining" starts the next numbered attempt from the latest saved checkpoint and merges new unique videos into the same source catalog instead of starting from zero.
@@ -181,6 +186,13 @@ Saved manifests and result viewing:
 - Result views include "Combined Results", "By Fetch Attempt", and "Current Attempt". Search/filter controls operate only on the selected saved result view and never call Dailymotion.
 - Result cards show compact fetch provenance when available: source, attempt number, fetch profile/status, date window, API page, collected time, duplicate/new status, and manifest relationship.
 - Export controls can download the combined channel manifest or selected attempt as JSON or NDJSON snapshots. Exports include public source/coverage/attempt/video metadata only and must not include secrets or server-only environment values.
+
+Saved-results search:
+
+- `POST /api/dailymotion/channel/search-saved` searches persisted manifest rows and canonical video metadata. It does not call Dailymotion.
+- The channel manifest page also builds a FlexSearch index over the currently loaded result page for fast local multilingual search. FlexSearch was chosen over MiniSearch/Fuse for fast browser/Node full-text indexing, multi-field weighting through separate indexes, Unicode/Arabic-friendly normalization, suggestions, and room to move to larger/persistent indexes later.
+- Server search is authoritative for saved database results and supports pagination. Loaded-index search is intentionally scoped to videos already loaded in the browser so large manifests are not blindly shipped to the client.
+- Current search fields include title, description, owner/channel, tags, language, year, duration, views, attempt number, fetch profile, and window range. Exact phrase mode is supported; typo-tolerant suggestions apply to the loaded FlexSearch index.
 
 Current persistence status:
 

@@ -28,6 +28,7 @@
     "class-variance-authority": "latest",
     "clsx": "latest",
     "dotenv": "^17.4.2",
+    "flexsearch": "^0.8.212",
     "framer-motion": "latest",
     "lucide-react": "latest",
     "next": "^16.2.0",

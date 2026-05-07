@@ -2,6 +2,20 @@
 
 Current database policy is defined by the newest entry below. Older entries are retained as historical record and may describe superseded `DIRECT_URL` behavior that is no longer active.
 
+## 2026-05-07 - Saved channel browser, attempt details, Gemini model env, and saved-results search
+
+- Read the current ledgers/docs, env example, package manifests/lockfile, Prisma schema/migration, current persistence repository, Dailymotion deep-fetch service, Channel Explorer UI, type contracts, Gemini client/env code, local Next.js 16 docs, and current search-library/Gemini docs before editing.
+- Added server-only `GEMINI_MODEL` support in `src/lib/config/env.ts` and `src/lib/ai/gemini-client.ts`; missing/blank model falls back to `gemini-1.5-flash`, and neither Gemini key nor model is exposed through `NEXT_PUBLIC_*`.
+- Installed `flexsearch@0.8.212` and added a saved-results search split: `POST /api/dailymotion/channel/search-saved` searches persisted Prisma manifest/video rows only, while the channel page builds a FlexSearch index over the intentionally loaded result page for fast local multilingual search.
+- Added saved channel APIs and pages: `/channels`, `/channels/[sourceId]`, `/channels/[sourceId]/attempts/[attemptId]`, `GET /api/dailymotion/channel/sources`, `GET /api/dailymotion/channel/[sourceId]/combined-manifest`, `GET /api/dailymotion/channel/[sourceId]/attempts`, and `GET /api/dailymotion/channel/attempts/[attemptId]`.
+- Hardened combined source catalog behavior without a schema change: the durable `source-catalog` manifest remains the canonical combined manifest; attempt manifests remain auditable; combined rows keep first-seen provenance and now append source-wide positions for new unique videos instead of reusing attempt-local indexes.
+- Strengthened shared manifest/runtime dedupe with `getVideoDedupeKey`: platform video ID first, canonical URL second, then a conservative normalized fingerprint using title, duration, published date, owner/source, thumbnail, and description hash when provider ID is unavailable. DB uniqueness still relies on canonical Dailymotion `platform_video_id` rows and `manifest_items(manifest_id, video_id)`.
+- Updated UI navigation and Channel Explorer handoff: app nav/home now link to Channels, Channel Explorer links to saved history, and saved pages can prefill the explorer source/resumable job without triggering provider calls.
+- Updated docs and ledgers for `GEMINI_MODEL`, saved channel pages, combined manifest behavior, attempt detail behavior, FlexSearch choice, saved-search limits, dedupe logic, resume labels, and migration/apply status.
+- Verification: `npm run db:validate` passed; `npm run db:status` passed and reported schema up to date; `npx prisma validate` passed; `npx prisma generate` passed; `npm run typecheck` passed; `npm run build` passed on Next.js 16.2.5; route/API smoke tests passed for `/channels`, `/channel-explorer`, source detail, attempt detail, combined manifest, English saved search, and UTF-8 Arabic saved search; Playwright Edge screenshot smoke passed for desktop `/channels` and mobile source detail.
+- Blocked verification: `npm run lint` still fails because the existing script calls removed `next lint`, which Next treats as invalid project directory `lint`.
+- Safety: no migration was created or applied; `db:apply` was not run; `DATABASE_URL` remains the only database URL; `DIRECT_URL` was not restored; no destructive Prisma command, table drop, private Dailymotion access, video download/scrape/rehost behavior, or secret printing was introduced.
+
 ## 2026-05-07 - Channel Explorer page-size, combined catalog manifest, provenance, and continue-fetch hardening
 
 - Read the deep-fetch persistence guide, current ledgers/docs, README, env example, Prisma schema/migration, Channel Explorer UI/components, Dailymotion routes/services, manifest repository/types, result-card components, local Next.js 16 docs, and current Dailymotion public API docs before editing.

@@ -16,12 +16,16 @@ import { getPrismaClient } from "@/lib/prisma/client";
 import { analyzeDailymotionChannelInput } from "@/lib/platforms/dailymotion/dailymotion-url-analyzer";
 import type {
   ChannelCoverage,
+  ChannelAttemptDetail,
   ChannelFetchJobSnapshot,
   ChannelFetchSettings,
   ChannelPersistenceMode,
+  ChannelSourceSummary,
   ChannelSourceMetadata,
   FetchHistoryEntry,
   FetchPageAttemptSummary,
+  SavedChannelResultScope,
+  SavedChannelSort,
   FetchWindowSummary,
 } from "@/types/channel-fetch";
 import type { ChannelManifest, ChannelSourceType, ManifestFetchStatus } from "@/types/manifest";
@@ -47,6 +51,28 @@ type PersistedManifestWithGraph = Prisma.ManifestGetPayload<{
     items: { include: { video: true; fetchWindow: { include: { fetchJob: true } } } };
   };
 }>;
+type PersistedSourceWithSummaryGraph = Prisma.VideoSourceGetPayload<{
+  include: {
+    catalogSnapshots: true;
+    manifests: { include: { _count: { select: { items: true } } } };
+    fetchJobs: true;
+    _count: { select: { fetchJobs: true } };
+  };
+}>;
+type PersistedManifestItemForSavedResults = Prisma.ManifestItemGetPayload<{
+  include: { video: true; fetchWindow: { include: { fetchJob: true } } };
+}>;
+
+type SavedChannelResultsInput = {
+  sourceId: string;
+  scope?: SavedChannelResultScope;
+  attemptId?: string | null;
+  query?: string | null;
+  limit?: number | null;
+  offset?: number | null;
+  sort?: SavedChannelSort | null;
+  exactPhrase?: boolean | null;
+};
 
 function addHours(date: Date, hours: number) {
   const next = new Date(date);
@@ -95,6 +121,10 @@ function attemptNumberFromJob(job: Pick<PersistedJobWithGraph, "progressJson">) 
 
 function sourceKey(sourceType: string, externalSourceId: string) {
   return `${sourceType}:${externalSourceId}`.toLowerCase();
+}
+
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.trim());
 }
 
 function explicitSourceKeyParts(value: string) {
@@ -219,6 +249,158 @@ function metadataForSource(source: PersistedJobWithGraph["source"]): ChannelSour
     persistence: "database",
     persistenceWarning: null,
   };
+}
+
+function sourceSummaryFromRecord(source: PersistedSourceWithSummaryGraph): ChannelSourceSummary {
+  const latestSnapshot = source.catalogSnapshots[0] ?? null;
+  const combinedManifest = source.manifests.find((manifest) => manifest.persistenceType === ManifestPersistenceType.DURABLE && manifest.query === "source-catalog") ?? null;
+  const latestJob = source.fetchJobs[0] ?? null;
+  const latestAttemptNumber = latestJob ? attemptNumberFromProgress(latestJob.progressJson) ?? 1 : null;
+  const collectedUniqueVideos = latestSnapshot ? numberFromBigInt(latestSnapshot.collectedUniqueVideos) : combinedManifest?._count.items ?? 0;
+  const reportedTotal = source.reportedTotalFromApi;
+  const estimatedRemaining = latestSnapshot?.estimatedRemainingVideos !== null && latestSnapshot?.estimatedRemainingVideos !== undefined
+    ? numberFromBigInt(latestSnapshot.estimatedRemainingVideos)
+    : reportedTotal !== null
+      ? Math.max(reportedTotal - collectedUniqueVideos, 0)
+      : null;
+  const coveragePercent = latestSnapshot?.coveragePercent !== null && latestSnapshot?.coveragePercent !== undefined
+    ? Number(latestSnapshot.coveragePercent)
+    : reportedTotal && reportedTotal > 0
+      ? Math.min(100, Number(((collectedUniqueVideos / reportedTotal) * 100).toFixed(2)))
+      : null;
+
+  return {
+    id: source.id,
+    sourceKey: sourceKey(source.sourceType, source.externalSourceId),
+    sourceType: source.sourceType,
+    sourceInput: source.canonicalUrl ?? source.handle ?? source.username ?? `${source.sourceType}:${source.externalSourceId}`,
+    externalSourceId: source.externalSourceId,
+    handle: source.handle,
+    username: source.username,
+    displayName: source.displayName,
+    canonicalUrl: source.canonicalUrl,
+    thumbnailUrl: source.thumbnailUrl,
+    avatarUrl: source.avatarUrl,
+    reportedTotalFromApi: reportedTotal,
+    reportedTotalCheckedAt: iso(source.reportedTotalCheckedAt),
+    collectedUniqueVideos,
+    estimatedRemainingVideos: estimatedRemaining,
+    coveragePercent,
+    coverageStatus: channelStatus(latestSnapshot?.coverageStatus ?? latestJob?.coverageStatusAtEnd ?? CoverageStatus.UNKNOWN) as ChannelSourceSummary["coverageStatus"],
+    coverageConfidence: channelStatus(latestSnapshot?.coverageConfidence ?? CoverageConfidence.UNKNOWN) as ChannelSourceSummary["coverageConfidence"],
+    totalAttempts: source._count.fetchJobs,
+    lastFetchTime: iso(source.lastFetchedAt ?? latestJob?.updatedAt),
+    latestAttemptId: latestJob?.id ?? null,
+    latestAttemptNumber,
+    latestAttemptStatus: latestJob ? channelStatus(latestJob.status) : null,
+    latestResumableAttemptId: latestJob && isTerminalButResumable(latestJob.status, latestJob.resumable) ? latestJob.id : null,
+    combinedManifestId: combinedManifest?.id ?? null,
+    persistence: "database",
+    persistenceWarning: null,
+  };
+}
+
+async function findSourceSummaryRecord(sourceId: string) {
+  const prisma = getPrismaClient();
+  return prisma.videoSource.findFirst({
+    where: { id: sourceId, platform: PLATFORM },
+    include: {
+      catalogSnapshots: { orderBy: { lastCheckedAt: "desc" }, take: 1 },
+      manifests: {
+        where: {
+          manifestType: ManifestType.CHANNEL,
+          persistenceType: ManifestPersistenceType.DURABLE,
+          platform: PLATFORM,
+          query: "source-catalog",
+        },
+        include: { _count: { select: { items: true } } },
+      },
+      fetchJobs: {
+        where: { jobType: JOB_TYPE, platform: PLATFORM },
+        orderBy: { updatedAt: "desc" },
+        take: 1,
+      },
+      _count: { select: { fetchJobs: true } },
+    },
+  });
+}
+
+function safeLimit(value: number | null | undefined, fallback = 48, max = 200) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return fallback;
+  return Math.min(Math.trunc(number), max);
+}
+
+function safeOffset(value: number | null | undefined) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return 0;
+  return Math.trunc(number);
+}
+
+function savedResultOrderBy(sort: SavedChannelSort): Prisma.ManifestItemOrderByWithRelationInput[] {
+  if (sort === "newest") return [{ video: { publishedAt: { sort: "desc", nulls: "last" } } }, { position: "asc" }];
+  if (sort === "oldest") return [{ video: { publishedAt: { sort: "asc", nulls: "last" } } }, { position: "asc" }];
+  if (sort === "views_desc") return [{ video: { viewsCount: { sort: "desc", nulls: "last" } } }, { position: "asc" }];
+  if (sort === "duration_desc") return [{ video: { durationSeconds: { sort: "desc", nulls: "last" } } }, { position: "asc" }];
+  if (sort === "title_asc") return [{ video: { title: "asc" } }, { position: "asc" }];
+  return [{ position: "asc" }];
+}
+
+function searchTerms(query: string, exactPhrase: boolean) {
+  const normalized = query.trim().replace(/\s+/gu, " ");
+  if (!normalized) return [];
+  return exactPhrase ? [normalized] : normalized.split(/\s+/u).filter(Boolean).slice(0, 8);
+}
+
+function videoSearchClause(term: string): Prisma.ManifestItemWhereInput {
+  const year = /^\d{4}$/.test(term) ? Number(term) : null;
+  const duration = /^\d{1,6}$/.test(term) ? Number(term) : null;
+  const textFilter = { contains: term, mode: "insensitive" as const };
+  const videoClauses: Prisma.VideoWhereInput[] = [
+    { title: textFilter },
+    { description: textFilter },
+    { ownerName: textFilter },
+    { channelName: textFilter },
+    { ownerId: textFilter },
+    { channelId: textFilter },
+    { language: textFilter },
+    { url: textFilter },
+    { platformVideoId: textFilter },
+    { tags: { has: term } },
+  ];
+
+  if (year !== null) videoClauses.push({ year });
+  if (duration !== null) videoClauses.push({ durationSeconds: duration });
+
+  return { video: { OR: videoClauses } };
+}
+
+function savedResultsWhere(manifestId: string, query: string, exactPhrase: boolean): Prisma.ManifestItemWhereInput {
+  const terms = searchTerms(query, exactPhrase);
+  if (terms.length === 0) return { manifestId };
+
+  // Saved-results search stays inside the persisted manifest tables. It never
+  // calls Dailymotion and keeps each term scoped to public video metadata fields
+  // so multilingual Arabic/English queries can run against previously collected
+  // records without changing backend authority or fetch state.
+  return {
+    manifestId,
+    AND: terms.map((term) => videoSearchClause(term)),
+  };
+}
+
+function savedVideoFromManifestItem(item: PersistedManifestItemForSavedResults, manifestScope: VideoCollectionProvenance["manifestScope"], manifestLabel: string): NormalizedVideoMetadata {
+  const fetchJob = item.fetchWindow?.fetchJob ?? null;
+  return videoFromManifestItem(item as unknown as PersistedManifestItemWithVideo, {
+    manifestScope,
+    manifestLabel,
+    fetchJobId: fetchJob?.id ?? null,
+    attemptNumber: fetchJob ? attemptNumberFromProgress(fetchJob.progressJson) ?? 1 : null,
+    fetchProfile: fetchJob ? channelStatus(fetchJob.fetchProfile).replaceAll("_", "-") : null,
+    fetchStatus: fetchJob ? channelStatus(fetchJob.status) : null,
+    windowStart: iso(item.fetchWindow?.windowStart),
+    windowEnd: iso(item.fetchWindow?.windowEnd),
+  });
 }
 
 function provenanceFromSnapshot(value: Prisma.JsonValue | null | undefined): VideoCollectionProvenance | null {
@@ -940,6 +1122,8 @@ export async function persistChannelFetchSnapshot(snapshot: ChannelFetchJobSnaps
     });
   }
 
+  let nextCombinedPosition = await prisma.manifestItem.count({ where: { manifestId: combinedManifest.id } });
+
   for (let index = 0; index < snapshot.manifest.items.length; index += 1) {
     const item = snapshot.manifest.items[index];
     const video = await upsertVideo(item, source.id);
@@ -975,28 +1159,28 @@ export async function persistChannelFetchSnapshot(snapshot: ChannelFetchJobSnaps
       },
     });
 
-    await prisma.manifestItem.upsert({
+    const existingCombinedItem = await prisma.manifestItem.findUnique({
       where: {
         manifestId_videoId: {
           manifestId: combinedManifest.id,
           videoId: video.id,
         },
       },
-      create: {
+      select: { id: true },
+    });
+
+    if (!existingCombinedItem) {
+      await prisma.manifestItem.create({
+        data: {
         manifestId: combinedManifest.id,
         videoId: video.id,
         fetchWindowId: combinedProvenance.fetchWindowId,
-        position: BigInt(index + 1),
+        position: BigInt(++nextCombinedPosition),
         pageNumber: combinedProvenance.pageNumber,
         metadataSnapshotJson: toJson(combinedSnapshot),
-      },
-      update: {
-        // Existing combined rows keep their first-seen provenance. Updating the
-        // position only keeps list rendering stable without erasing which
-        // attempt originally discovered the video.
-        position: BigInt(index + 1),
-      },
-    });
+        },
+      });
+    }
   }
 
   const combinedUniqueCount = await prisma.manifestItem.count({ where: { manifestId: combinedManifest.id } });
@@ -1118,7 +1302,9 @@ export async function listPersistedChannelFetchHistory(inputOrSourceKey?: string
   if (inputOrSourceKey) {
     const raw = inputOrSourceKey.trim();
     const parsedKey = explicitSourceKeyParts(raw);
-    if (parsedKey) {
+    if (isUuid(raw)) {
+      sourceFilter = { sourceId: raw };
+    } else if (parsedKey) {
       sourceFilter = {
         source: {
           platform: PLATFORM,
@@ -1167,6 +1353,10 @@ export async function listPersistedChannelFetchHistory(inputOrSourceKey?: string
 async function findSourceByInputOrKey(inputOrSourceKey: string) {
   const prisma = getPrismaClient();
   const raw = inputOrSourceKey.trim();
+  if (isUuid(raw)) {
+    return prisma.videoSource.findUnique({ where: { id: raw } });
+  }
+
   const parsedKey = explicitSourceKeyParts(raw);
   if (parsedKey) {
     return prisma.videoSource.findUnique({
@@ -1190,6 +1380,45 @@ async function findSourceByInputOrKey(inputOrSourceKey: string) {
       },
     },
   });
+}
+
+export async function listPersistedChannelSources(limit = 100): Promise<ChannelSourceSummary[]> {
+  if (!persistenceEnabled()) return [];
+  const prisma = getPrismaClient();
+  const sources = await prisma.videoSource.findMany({
+    where: {
+      platform: PLATFORM,
+      fetchJobs: { some: { jobType: JOB_TYPE, platform: PLATFORM } },
+    },
+    include: {
+      catalogSnapshots: { orderBy: { lastCheckedAt: "desc" }, take: 1 },
+      manifests: {
+        where: {
+          manifestType: ManifestType.CHANNEL,
+          persistenceType: ManifestPersistenceType.DURABLE,
+          platform: PLATFORM,
+          query: "source-catalog",
+        },
+        include: { _count: { select: { items: true } } },
+      },
+      fetchJobs: {
+        where: { jobType: JOB_TYPE, platform: PLATFORM },
+        orderBy: { updatedAt: "desc" },
+        take: 1,
+      },
+      _count: { select: { fetchJobs: true } },
+    },
+    orderBy: { updatedAt: "desc" },
+    take: safeLimit(limit, 100, 250),
+  });
+
+  return sources.map(sourceSummaryFromRecord);
+}
+
+export async function getPersistedChannelSourceSummary(sourceId: string): Promise<ChannelSourceSummary | null> {
+  if (!persistenceEnabled()) return null;
+  const source = await findSourceSummaryRecord(sourceId);
+  return source ? sourceSummaryFromRecord(source) : null;
 }
 
 function manifestFromPersistedCatalog(manifest: PersistedManifestWithGraph, history: FetchHistoryEntry[], coverage: ChannelCoverage | null): ChannelManifest {
@@ -1290,6 +1519,173 @@ export async function getPersistedCombinedChannelManifest(inputOrSourceKey: stri
     manifest: manifest ? manifestFromPersistedCatalog(manifest, history, coverage) : null,
     history,
     coverage,
+  };
+}
+
+export async function getPersistedSavedChannelResults(input: SavedChannelResultsInput) {
+  if (!persistenceEnabled()) {
+    return {
+      source: null,
+      items: [],
+      total: 0,
+      limit: safeLimit(input.limit),
+      offset: safeOffset(input.offset),
+      sort: input.sort ?? "first_collected",
+      scope: input.scope ?? "combined",
+      attemptId: input.attemptId ?? null,
+      manifestId: null,
+    };
+  }
+
+  const prisma = getPrismaClient();
+  const source = await getPersistedChannelSourceSummary(input.sourceId);
+  if (!source) {
+    return {
+      source: null,
+      items: [],
+      total: 0,
+      limit: safeLimit(input.limit),
+      offset: safeOffset(input.offset),
+      sort: input.sort ?? "first_collected",
+      scope: input.scope ?? "combined",
+      attemptId: input.attemptId ?? null,
+      manifestId: null,
+    };
+  }
+
+  const scope = input.scope ?? "combined";
+  const limit = safeLimit(input.limit);
+  const offset = safeOffset(input.offset);
+  const sort = input.sort ?? "first_collected";
+  const query = input.query?.trim() ?? "";
+  const exactPhrase = Boolean(input.exactPhrase);
+  let manifestId: string | null = null;
+  let manifestScope: VideoCollectionProvenance["manifestScope"] = "combined";
+  let manifestLabel = "Combined Manifest";
+  let resolvedAttemptId: string | null = input.attemptId ?? null;
+
+  if (scope === "attempt") {
+    const job = await prisma.fetchJob.findFirst({
+      where: {
+        id: input.attemptId ?? undefined,
+        sourceId: input.sourceId,
+        jobType: JOB_TYPE,
+        platform: PLATFORM,
+      },
+      orderBy: { updatedAt: "desc" },
+    });
+    manifestId = job?.manifestId ?? null;
+    resolvedAttemptId = job?.id ?? null;
+    manifestScope = "attempt";
+    manifestLabel = job ? `Attempt #${attemptNumberFromProgress(job.progressJson) ?? 1}` : "Attempt Manifest";
+  } else {
+    const manifest = await prisma.manifest.findFirst({
+      where: {
+        manifestType: ManifestType.CHANNEL,
+        persistenceType: ManifestPersistenceType.DURABLE,
+        platform: PLATFORM,
+        sourceId: input.sourceId,
+        query: "source-catalog",
+      },
+      select: { id: true },
+    });
+    manifestId = manifest?.id ?? null;
+  }
+
+  if (!manifestId) {
+    return {
+      source,
+      items: [],
+      total: 0,
+      limit,
+      offset,
+      sort,
+      scope,
+      attemptId: resolvedAttemptId,
+      manifestId: null,
+    };
+  }
+
+  const where = savedResultsWhere(manifestId, query, exactPhrase);
+  const [total, items] = await Promise.all([
+    prisma.manifestItem.count({ where }),
+    prisma.manifestItem.findMany({
+      where,
+      include: { video: true, fetchWindow: { include: { fetchJob: true } } },
+      orderBy: savedResultOrderBy(sort),
+      skip: offset,
+      take: limit,
+    }),
+  ]);
+
+  return {
+    source,
+    items: items.map((item) => savedVideoFromManifestItem(item, manifestScope, manifestLabel)),
+    total,
+    limit,
+    offset,
+    sort,
+    scope,
+    attemptId: resolvedAttemptId,
+    manifestId,
+  };
+}
+
+export async function getPersistedCombinedChannelManifestPage(input: Omit<SavedChannelResultsInput, "scope" | "attemptId">) {
+  if (!persistenceEnabled()) return { source: null, manifest: null, history: [], coverage: null, items: [], total: 0, limit: safeLimit(input.limit), offset: safeOffset(input.offset), sort: input.sort ?? "first_collected" };
+  const prisma = getPrismaClient();
+  const source = await getPersistedChannelSourceSummary(input.sourceId);
+  if (!source) return { source: null, manifest: null, history: [], coverage: null, items: [], total: 0, limit: safeLimit(input.limit), offset: safeOffset(input.offset), sort: input.sort ?? "first_collected" };
+
+  const results = await getPersistedSavedChannelResults({ ...input, scope: "combined" });
+  const [manifest, history, coverage] = await Promise.all([
+    results.manifestId
+      ? prisma.manifest.findUnique({
+          where: { id: results.manifestId },
+          include: {
+            source: true,
+            items: {
+              where: savedResultsWhere(results.manifestId, input.query?.trim() ?? "", Boolean(input.exactPhrase)),
+              include: { video: true, fetchWindow: { include: { fetchJob: true } } },
+              orderBy: savedResultOrderBy(results.sort),
+              skip: results.offset,
+              take: results.limit,
+            },
+          },
+        })
+      : null,
+    listPersistedChannelFetchHistory(input.sourceId, 100),
+    getLatestPersistedChannelCoverage(input.sourceId),
+  ]);
+
+  return {
+    source,
+    manifest: manifest ? manifestFromPersistedCatalog(manifest, history, coverage) : null,
+    history,
+    coverage,
+    items: results.items,
+    total: results.total,
+    limit: results.limit,
+    offset: results.offset,
+    sort: results.sort,
+  };
+}
+
+export async function getPersistedChannelAttemptDetail(attemptId: string, sourceId?: string | null): Promise<ChannelAttemptDetail | null> {
+  if (!persistenceEnabled()) return null;
+  const job = await findJobWithGraph(attemptId);
+  if (!job || !job.sourceId) return null;
+  if (sourceId && job.sourceId !== sourceId) return null;
+  const source = await getPersistedChannelSourceSummary(job.sourceId);
+  if (!source) return null;
+  const snapshot = persistedJobSnapshot(job);
+
+  return {
+    source,
+    job: snapshot,
+    windows: job.windows.map(windowSummary),
+    pageAttempts: job.pageAttempts.map(attemptSummary),
+    items: snapshot.manifest.items,
   };
 }
 

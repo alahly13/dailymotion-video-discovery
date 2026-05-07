@@ -19,6 +19,7 @@ const isBuildTime = process.env.NEXT_PHASE === "phase-production-build";
 
 const optionalServerSchema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
+  GEMINI_MODEL: z.string().trim().min(1).optional(),
   DAILYMOTION_API_BASE_URL: z.string().url().default("https://api.dailymotion.com"),
   DAILYMOTION_API_KEY: z.string().optional(),
   CRON_SECRET: z.string().optional(),
@@ -93,6 +94,9 @@ export const optionalServerEnv = optionalServerSchema.parse(process.env);
 export const env = {
   get geminiApiKey() {
     return requireServerEnv("GEMINI_API_KEY");
+  },
+  get geminiModel() {
+    return optionalServerEnv.GEMINI_MODEL?.trim() || "gemini-1.5-flash";
   },
   get databaseUrl() {
     return getDatabaseEnv().DATABASE_URL;

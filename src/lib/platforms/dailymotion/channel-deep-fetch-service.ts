@@ -1,4 +1,4 @@
-import { createChannelManifest } from "@/lib/manifests/channel-manifest";
+import { createChannelManifest, getVideoDedupeKey, platformVideoIdentityKey } from "@/lib/manifests/channel-manifest";
 import {
   channelDatabasePersistenceMode,
   channelPersistenceUnavailableWarning,
@@ -250,11 +250,12 @@ function mergeVideos(
 
   for (const video of videos) {
     processedVideos += 1;
-    if (job.seenVideoIds.has(video.id)) {
+    const dedupeKey = getVideoDedupeKey(video);
+    if (job.seenVideoIds.has(dedupeKey)) {
       duplicates += 1;
       continue;
     }
-    job.seenVideoIds.add(video.id);
+    job.seenVideoIds.add(dedupeKey);
     job.items.push({
       ...video,
       collectionProvenance: {
@@ -562,7 +563,9 @@ export async function startChannelFetchJob(input: string, rawSettings: unknown, 
   const initialWindows = [...resumeWindows, ...plannedWindows]
     .slice(0, settings.maxWindows);
   const attemptNumber = await nextAttemptNumberForSource(sourceKey);
-  const existingVideoIds = continuationState?.existingVideoIds ?? [];
+  const existingVideoIds = (continuationState?.existingVideoIds ?? [])
+    .map((id) => platformVideoIdentityKey("dailymotion", id))
+    .filter((id): id is string => Boolean(id));
 
   const job: RuntimeFetchJob = {
     id,
@@ -627,7 +630,7 @@ async function hydrateRuntimeJobFromDatabase(jobId: string): Promise<RuntimeFetc
       status: persisted.snapshot.status,
       completenessStatus: persisted.snapshot.completenessStatus,
       items,
-      seenVideoIds: new Set(items.map((item) => item.id)),
+      seenVideoIds: new Set(items.map(getVideoDedupeKey)),
       sourceCollectedSeedCount: Math.max(0, coverage.collectedUniqueVideos - items.length),
       windows,
       pageAttempts,

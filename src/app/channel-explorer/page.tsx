@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AiHelperPanel } from "@/components/ai/ai-helper-panel";
 import { ChannelCoveragePanel } from "@/components/channel-explorer/channel-coverage-panel";
 import { ChannelFetchConfigPanel } from "@/components/channel-explorer/channel-fetch-config-panel";
@@ -99,6 +100,18 @@ export default function ChannelExplorerPage() {
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const stopRequestedRef = useRef(false);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const source = params.get("source");
+    const resumeJobId = params.get("resumeJobId");
+
+    // Saved channel pages can hand a source and optional resumable job back to
+    // the explorer. This only pre-fills local controls; it does not make a
+    // Dailymotion request until the user explicitly analyzes or starts fetching.
+    if (source) setInput((current) => current || source);
+    if (resumeJobId) setFetchSettings((current) => ({ ...current, resumeJobId }));
+  }, []);
 
   const selectedManifest = resultViewMode === "current-attempt" ? currentAttemptManifest : combinedManifest ?? currentAttemptManifest;
   const filteredItems = useMemo(() => applyAdvancedVideoFilters(selectedManifest?.items ?? [], filters), [selectedManifest, filters]);
@@ -330,6 +343,9 @@ export default function ChannelExplorerPage() {
         <p className="max-w-3xl text-lg leading-8 text-[var(--muted-foreground)]">
           Collect public channel metadata through explicit fetch profiles, track database checkpoints when persistence is enabled, preserve partial manifests, and filter only what has already been collected.
         </p>
+        <Link href="/channels" className="inline-flex rounded-md border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-sm font-bold transition hover:bg-[var(--surface-muted)] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--ring)]">
+          Open saved channel history
+        </Link>
       </section>
 
       <ChannelInputPanel value={input} loading={loading} canStop={loading || activeJob?.status === "running"} onChange={setInput} onAnalyze={analyze} onStop={stopFetching} />
@@ -358,6 +374,11 @@ export default function ChannelExplorerPage() {
               View: {mode === "combined" ? "Combined Results" : mode === "by-attempt" ? "By Fetch Attempt" : "Current Attempt"}
             </button>
           ))}
+          {metadata?.persistedSourceId ? (
+            <Link href={`/channels/${metadata.persistedSourceId}`} className="rounded-md border border-[var(--border)] px-3 py-2 text-sm font-bold text-[var(--muted-foreground)]">
+              View saved channel page
+            </Link>
+          ) : null}
           <button type="button" onClick={() => refreshSavedManifest()} className="rounded-md border border-[var(--border)] px-3 py-2 text-sm font-bold text-[var(--muted-foreground)]">Open saved channel manifest</button>
           <button type="button" onClick={() => exportManifest(combinedManifest ?? selectedManifest, "dailymotion-combined-manifest.json")} className="rounded-md border border-[var(--border)] px-3 py-2 text-sm font-bold text-[var(--muted-foreground)]">Export combined manifest</button>
           <button type="button" onClick={() => exportManifest(combinedManifest ?? selectedManifest, "dailymotion-combined-manifest.ndjson", "ndjson")} className="rounded-md border border-[var(--border)] px-3 py-2 text-sm font-bold text-[var(--muted-foreground)]">Export combined NDJSON</button>

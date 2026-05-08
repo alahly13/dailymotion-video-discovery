@@ -1,0 +1,15 @@
+
+> ai-public-video-discovery-platform@0.1.0 dev
+> next dev -p 3004
+
+▲ Next.js 16.2.5 (Turbopack)
+- Local:         http://localhost:3004
+- Network:       http://172.17.224.1:3004
+- Environments: .env
+✓ Ready in 48s
+Creating turbopack project { dir: 'F:\\discovery\\dailymotion-video-discovery', testMode: true }
+○ Compiling proxy ...
+
+✓ Finished writing to filesystem cache in 36.3s
+✓ Finished filesystem cache database compaction in 2.7min
+✓ Finished writing to filesystem cache in 10.4s

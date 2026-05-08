@@ -1,4 +1,4 @@
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, PieChart } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import type { ChannelCoverage, ChannelPersistenceMode } from "@/types/channel-fetch";
 
@@ -26,26 +26,32 @@ export function ChannelCoveragePanel({ coverage, persistence, persistenceWarning
   ];
 
   return (
-    <Card className="space-y-4">
-      <div>
-        <h2 className="text-lg font-bold">Channel Coverage</h2>
+    <Card className="space-y-5">
+      <div className="flex items-start gap-3">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-[var(--border)] bg-[color-mix(in_srgb,var(--primary)_12%,transparent)] text-[var(--primary)]">
+          <PieChart className="h-5 w-5" aria-hidden="true" />
+        </span>
+        <div className="min-w-0">
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-[var(--muted-foreground)]">Channel Coverage</p>
+          <h2 className="mt-1 text-xl font-black">Saved Catalog Coverage</h2>
         <p className="mt-1 max-w-3xl text-sm leading-6 text-[var(--muted-foreground)]">
           Reported total depends on what Dailymotion exposes for this endpoint. If unavailable, the app shows collected unique videos and coverage status instead.
         </p>
+        </div>
       </div>
-      <div className="rounded-md border border-[var(--border)] bg-[var(--surface-muted)] p-3 text-sm leading-6 text-[var(--muted-foreground)]">
+      <div className="panel-muted p-3 text-sm leading-6 text-[var(--muted-foreground)]">
         {persistenceCopy}
       </div>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="metric-grid">
         {stats.map(([label, value]) => (
-          <div key={label}>
-            <p className="text-xs font-semibold uppercase text-[var(--muted-foreground)]">{label}</p>
+          <div key={label} className="metric-tile">
+            <p className="text-[11px] font-black uppercase tracking-[0.12em] text-[var(--muted-foreground)]">{label}</p>
             <p className="mt-1 break-words text-sm font-bold">{value}</p>
           </div>
         ))}
       </div>
-      <div className="flex items-start gap-3 rounded-md border border-[var(--border)] bg-[var(--surface-muted)] p-3 text-sm leading-6 text-[var(--muted-foreground)]">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent)]" aria-hidden="true" />
+      <div className="flex items-start gap-3 rounded-md border border-[var(--border)] bg-[color-mix(in_srgb,var(--warning)_12%,transparent)] p-3 text-sm leading-6 text-[var(--muted-foreground)]">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--warning)]" aria-hidden="true" />
         <p>{coverage?.warning ?? "Full channel coverage is only confirmed when every planned time window completes without caps or failures."}</p>
       </div>
     </Card>

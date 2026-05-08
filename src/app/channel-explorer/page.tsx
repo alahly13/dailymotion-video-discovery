@@ -379,41 +379,56 @@ export default function ChannelExplorerPage() {
 
   return (
     <div className="space-y-8">
-      <section className="space-y-4">
-        <p className="text-sm font-bold uppercase text-[var(--accent)]">Channel Explorer</p>
-        <h1 className="max-w-4xl text-4xl font-black leading-tight sm:text-6xl">Build a public Dailymotion metadata catalog.</h1>
-        <p className="max-w-3xl text-lg leading-8 text-[var(--muted-foreground)]">
+      <section className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-6 shadow-[var(--shadow)] sm:p-8">
+        <div className="terminal-rule mb-6 h-1 w-32 rounded-full" aria-hidden="true" />
+        <p className="text-xs font-black uppercase tracking-[0.2em] text-[var(--primary)]">Channel Explorer</p>
+        <h1 className="mt-3 max-w-4xl text-4xl font-black leading-tight sm:text-6xl">Build a public Dailymotion metadata catalog.</h1>
+        <p className="mt-4 max-w-3xl text-base leading-8 text-[var(--muted-foreground)] sm:text-lg">
           Collect public channel metadata through explicit fetch profiles, track database checkpoints when persistence is enabled, preserve partial manifests, and filter only what has already been collected.
         </p>
-        <Link href="/channels" className="inline-flex rounded-md border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-sm font-bold transition hover:bg-[var(--surface-muted)] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--ring)]">
+        <Link href="/channels" className="mt-6 inline-flex min-h-10 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--surface-container-low)] px-4 text-center text-sm font-bold transition hover:border-[var(--border-strong)] hover:bg-[var(--surface-container-high)] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--ring)]">
           Open saved channel history
         </Link>
       </section>
 
-      <ChannelInputPanel value={input} loading={loading} canStop={loading || activeJob?.status === "running"} onChange={setInput} onAnalyze={analyze} onStop={stopFetching} />
-      {analysis ? <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4 text-sm font-semibold text-[var(--success)]">Detected: {analysis}</div> : null}
-      {error ? <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4 text-sm font-semibold text-[var(--danger)]">{error}</div> : null}
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(20rem,0.85fr)] 2xl:grid-cols-[minmax(0,1.15fr)_minmax(24rem,0.85fr)]">
+        <div className="space-y-5">
+          <ChannelInputPanel value={input} loading={loading} canStop={loading || activeJob?.status === "running"} onChange={setInput} onAnalyze={analyze} onStop={stopFetching} />
+          {analysis ? <div className="rounded-lg border border-[color-mix(in_srgb,var(--success)_35%,transparent)] bg-[color-mix(in_srgb,var(--success)_10%,transparent)] p-4 text-sm font-bold text-[var(--success)]">Detected: {analysis}</div> : null}
+          {error ? <div className="rounded-lg border border-[color-mix(in_srgb,var(--error)_35%,transparent)] bg-[color-mix(in_srgb,var(--error)_10%,transparent)] p-4 text-sm font-bold text-[var(--error)]">{error}</div> : null}
+          <ChannelMetadataPanel metadata={metadata} coverage={coverage} loading={loading} persistence={persistenceMode} persistenceWarning={persistenceWarning} onRefresh={refreshMetadata} />
+        </div>
 
-      <div className="grid gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4 text-sm sm:grid-cols-2 lg:grid-cols-6">
-        {summaryStats.map(([label, value]) => (
-          <div key={label}>
-            <p className="text-xs font-semibold uppercase text-[var(--muted-foreground)]">{label}</p>
-            <p className="mt-1 break-words font-black">{value}</p>
+        <div className="space-y-5">
+          <div className="metric-grid rounded-lg border border-[var(--border)] bg-[var(--card)] p-4 shadow-[var(--shadow)]">
+            {summaryStats.map(([label, value]) => (
+              <div key={label} className="metric-tile">
+                <p className="text-[11px] font-black uppercase tracking-[0.12em] text-[var(--muted-foreground)]">{label}</p>
+                <p className="text-anywhere mt-1 text-lg font-black">{value}</p>
+              </div>
+            ))}
           </div>
-        ))}
+          <ChannelFetchConfigPanel settings={fetchSettings} safetyCaps={safetyCaps} loading={loading} primaryLabel={primaryFetchLabel} primaryCopy={primaryFetchCopy} hasSavedAttempts={hasSavedAttempts} onChange={setFetchSettings} onStart={runPrimaryFetch} onStartNew={() => startFetch(null, false)} onReset={() => setFetchSettings(defaultFetchSettings)} />
+        </div>
       </div>
 
-      <ChannelMetadataPanel metadata={metadata} coverage={coverage} loading={loading} persistence={persistenceMode} persistenceWarning={persistenceWarning} onRefresh={refreshMetadata} />
-      <ChannelFetchConfigPanel settings={fetchSettings} safetyCaps={safetyCaps} loading={loading} primaryLabel={primaryFetchLabel} primaryCopy={primaryFetchCopy} hasSavedAttempts={hasSavedAttempts} onChange={setFetchSettings} onStart={runPrimaryFetch} onStartNew={() => startFetch(null, false)} onReset={() => setFetchSettings(defaultFetchSettings)} />
-      <ChannelFetchProgress status={activeJob?.status ?? (loading ? "fetching" : selectedManifest?.fetchStatus ?? "idle")} pagesFetched={activeJob?.progress.pagesFetched ?? selectedManifest?.pagesFetched ?? 0} count={filteredItems.length} total={metadata?.reportedTotalFromApi ?? selectedManifest?.totalKnownItems ?? null} progress={activeJob?.progress ?? null} coverage={coverage} persistence={persistenceMode} persistenceWarning={persistenceWarning} />
-      <ChannelWindowFeedbackPanel windows={activeJob?.windows ?? []} recentPageAttempts={activeJob?.recentPageAttempts ?? []} progress={activeJob?.progress ?? null} resumable={Boolean(latestResumable || activeJob?.progress.resumable)} onResume={runPrimaryFetch} />
-      <ChannelFetchHistoryPanel history={history} activeJobId={activeJob?.id ?? null} loading={loading} persistence={persistenceMode} persistenceWarning={persistenceWarning} onResume={(jobId) => startFetch(jobId)} />
-      <ChannelCoveragePanel coverage={coverage} persistence={persistenceMode} persistenceWarning={persistenceWarning} />
+      <div className="grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
+        <ChannelFetchProgress status={activeJob?.status ?? (loading ? "fetching" : selectedManifest?.fetchStatus ?? "idle")} pagesFetched={activeJob?.progress.pagesFetched ?? selectedManifest?.pagesFetched ?? 0} count={filteredItems.length} total={metadata?.reportedTotalFromApi ?? selectedManifest?.totalKnownItems ?? null} progress={activeJob?.progress ?? null} coverage={coverage} persistence={persistenceMode} persistenceWarning={persistenceWarning} />
+        <ChannelWindowFeedbackPanel windows={activeJob?.windows ?? []} recentPageAttempts={activeJob?.recentPageAttempts ?? []} progress={activeJob?.progress ?? null} resumable={Boolean(latestResumable || activeJob?.progress.resumable)} onResume={runPrimaryFetch} />
+      </div>
+
+      <div className="grid gap-5 lg:grid-cols-2">
+        <ChannelFetchHistoryPanel history={history} activeJobId={activeJob?.id ?? null} loading={loading} persistence={persistenceMode} persistenceWarning={persistenceWarning} onResume={(jobId) => startFetch(jobId)} />
+        <ChannelCoveragePanel coverage={coverage} persistence={persistenceMode} persistenceWarning={persistenceWarning} />
+      </div>
       <ChannelManifestSummary manifest={selectedManifest} persistence={activeJob?.persistence ?? persistenceMode} />
-      <ChannelManifestSearchPanel query={manifestSearchQuery} scope={manifestSearchScope} exactPhrase={manifestSearchExactPhrase} fuzzy={manifestSearchFuzzy} sourceCount={selectedManifestItems.length} matchedCount={searchedItems.length} filteredCount={filteredItems.length} sourceLabel={searchSourceLabel} onQueryChange={setManifestSearchQuery} onScopeChange={setManifestSearchScope} onExactPhraseChange={setManifestSearchExactPhrase} onFuzzyChange={setManifestSearchFuzzy} />
-      <AdvancedFilterPanel filters={filters} onChange={setFilters} onReset={() => setFilters(defaultAdvancedVideoFilters)} />
+
+      <div className="grid gap-5 lg:grid-cols-[0.95fr_1.05fr]">
+        <ChannelManifestSearchPanel query={manifestSearchQuery} scope={manifestSearchScope} exactPhrase={manifestSearchExactPhrase} fuzzy={manifestSearchFuzzy} sourceCount={selectedManifestItems.length} matchedCount={searchedItems.length} filteredCount={filteredItems.length} sourceLabel={searchSourceLabel} onQueryChange={setManifestSearchQuery} onScopeChange={setManifestSearchScope} onExactPhraseChange={setManifestSearchExactPhrase} onFuzzyChange={setManifestSearchFuzzy} />
+        <AdvancedFilterPanel filters={filters} onChange={setFilters} onReset={() => setFilters(defaultAdvancedVideoFilters)} />
+      </div>
       <ActiveFilterChips filters={filters} />
-      <div className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4">
+      <div className="space-y-4 rounded-lg border border-[var(--border)] bg-[var(--card)] p-5 shadow-[var(--shadow)]">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-2xl font-black">Manifest Results</h2>
@@ -421,7 +436,7 @@ export default function ChannelExplorerPage() {
           </div>
           <p className="text-sm text-[var(--muted-foreground)]">{filteredItems.length} shown / {searchedItems.length} searched / {selectedManifest?.items.length ?? 0} collected</p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="action-row">
           {(["combined", "by-attempt", "current-attempt"] as const).map((mode) => (
             <button
               key={mode}
@@ -431,7 +446,7 @@ export default function ChannelExplorerPage() {
                 if (mode === "combined") setManifestSearchScope("combined");
                 if (mode === "current-attempt") setManifestSearchScope("attempt");
               }}
-              className={`rounded-md border px-3 py-2 text-sm font-bold transition ${resultViewMode === mode ? "border-[var(--accent)] bg-[var(--surface-muted)] text-[var(--foreground)]" : "border-[var(--border)] text-[var(--muted-foreground)]"}`}
+              className={`rounded-md border px-3 py-2 text-center text-sm font-bold transition ${resultViewMode === mode ? "border-[var(--primary)] bg-[color-mix(in_srgb,var(--primary)_12%,transparent)] text-[var(--foreground)]" : "border-[var(--border)] bg-[var(--surface-container-low)] text-[var(--muted-foreground)] hover:border-[var(--border-strong)]"}`}
             >
               View: {mode === "combined" ? "Combined Results" : mode === "by-attempt" ? "By Fetch Attempt" : "Current Attempt"}
             </button>
@@ -444,7 +459,7 @@ export default function ChannelExplorerPage() {
             const entry = history.find((item) => item.attemptNumber === attemptNumber);
             return (
               <section key={attemptNumber} className="space-y-3">
-                <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4">
+                <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-4 shadow-[var(--shadow)]">
                   <h3 className="text-lg font-black">Attempt #{attemptNumber || "unknown"}</h3>
                   <p className="mt-1 text-sm text-[var(--muted-foreground)]">
                     {entry ? `${entry.uniqueItemsCollected} videos added, ${entry.duplicateCount} duplicates skipped, ${entry.pagesFetched} pages, ${entry.windowsProcessed} windows, status ${entry.status}.` : `${items.length} videos in this attempt group.`}
@@ -458,24 +473,24 @@ export default function ChannelExplorerPage() {
       ) : (
         <VideoResultsGrid items={filteredItems} resultViewMode={resultViewMode} />
       )}
-      <div className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4">
+      <div className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--card)] p-5 shadow-[var(--shadow)]">
         <div>
           <h2 className="text-xl font-black">Export / Open Saved Channel Manifest</h2>
           <p className="mt-1 text-sm leading-6 text-[var(--muted-foreground)]">
             Exports use the manifest items already loaded in this page state. Opening the saved channel manifest reloads persisted metadata only; it does not start a Dailymotion fetch.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="action-row">
           {metadata?.persistedSourceId ? (
-            <Link href={`/channels/${metadata.persistedSourceId}`} className="rounded-md border border-[var(--border)] px-3 py-2 text-sm font-bold text-[var(--muted-foreground)] transition hover:bg-[var(--surface-muted)]">
+            <Link href={`/channels/${metadata.persistedSourceId}`} className="rounded-md border border-[var(--border)] bg-[var(--surface-container-low)] px-3 py-2 text-center text-sm font-bold text-[var(--muted-foreground)] transition hover:bg-[var(--surface-container-high)]">
               View saved channel page
             </Link>
           ) : null}
-          <button type="button" onClick={() => refreshSavedManifest()} className="rounded-md border border-[var(--border)] px-3 py-2 text-sm font-bold text-[var(--muted-foreground)] transition hover:bg-[var(--surface-muted)]">Open saved channel manifest</button>
-          <button type="button" onClick={() => exportManifest(combinedManifest ?? selectedManifest, "dailymotion-combined-manifest.json")} className="rounded-md border border-[var(--border)] px-3 py-2 text-sm font-bold text-[var(--muted-foreground)] transition hover:bg-[var(--surface-muted)]">Export combined manifest</button>
-          <button type="button" onClick={() => exportManifest(combinedManifest ?? selectedManifest, "dailymotion-combined-manifest.ndjson", "ndjson")} className="rounded-md border border-[var(--border)] px-3 py-2 text-sm font-bold text-[var(--muted-foreground)] transition hover:bg-[var(--surface-muted)]">Export combined NDJSON</button>
-          <button type="button" onClick={() => exportManifest(currentAttemptManifest, `dailymotion-attempt-${activeJob?.attemptNumber ?? "latest"}.json`)} className="rounded-md border border-[var(--border)] px-3 py-2 text-sm font-bold text-[var(--muted-foreground)] transition hover:bg-[var(--surface-muted)]">Export selected attempt</button>
-          <button type="button" onClick={() => exportManifest(currentAttemptManifest, `dailymotion-attempt-${activeJob?.attemptNumber ?? "latest"}.ndjson`, "ndjson")} className="rounded-md border border-[var(--border)] px-3 py-2 text-sm font-bold text-[var(--muted-foreground)] transition hover:bg-[var(--surface-muted)]">Export selected attempt NDJSON</button>
+          <button type="button" onClick={() => refreshSavedManifest()} className="rounded-md border border-[var(--border)] bg-[var(--surface-container-low)] px-3 py-2 text-center text-sm font-bold text-[var(--muted-foreground)] transition hover:bg-[var(--surface-container-high)]">Open saved channel manifest</button>
+          <button type="button" onClick={() => exportManifest(combinedManifest ?? selectedManifest, "dailymotion-combined-manifest.json")} className="rounded-md border border-[var(--border)] bg-[var(--surface-container-low)] px-3 py-2 text-center text-sm font-bold text-[var(--muted-foreground)] transition hover:bg-[var(--surface-container-high)]">Export combined manifest</button>
+          <button type="button" onClick={() => exportManifest(combinedManifest ?? selectedManifest, "dailymotion-combined-manifest.ndjson", "ndjson")} className="rounded-md border border-[var(--border)] bg-[var(--surface-container-low)] px-3 py-2 text-center text-sm font-bold text-[var(--muted-foreground)] transition hover:bg-[var(--surface-container-high)]">Export combined NDJSON</button>
+          <button type="button" onClick={() => exportManifest(currentAttemptManifest, `dailymotion-attempt-${activeJob?.attemptNumber ?? "latest"}.json`)} className="rounded-md border border-[var(--border)] bg-[var(--surface-container-low)] px-3 py-2 text-center text-sm font-bold text-[var(--muted-foreground)] transition hover:bg-[var(--surface-container-high)]">Export selected attempt</button>
+          <button type="button" onClick={() => exportManifest(currentAttemptManifest, `dailymotion-attempt-${activeJob?.attemptNumber ?? "latest"}.ndjson`, "ndjson")} className="rounded-md border border-[var(--border)] bg-[var(--surface-container-low)] px-3 py-2 text-center text-sm font-bold text-[var(--muted-foreground)] transition hover:bg-[var(--surface-container-high)]">Export selected attempt NDJSON</button>
         </div>
       </div>
       <AiHelperPanel />

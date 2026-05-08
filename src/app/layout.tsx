@@ -1,6 +1,19 @@
 import type { Metadata } from "next";
+import { JetBrains_Mono, Public_Sans } from "next/font/google";
 import "./globals.css";
 import { AppShell } from "@/components/layout/app-shell";
+
+const publicSans = Public_Sans({
+  subsets: ["latin"],
+  variable: "--font-public-sans",
+  display: "swap",
+});
+
+const jetBrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-jetbrains-mono",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "AI Public Video Discovery Platform",
@@ -9,8 +22,11 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" className={`${publicSans.variable} ${jetBrainsMono.variable}`} suppressHydrationWarning>
       <head>
+        {/* Theme bootstrapping belongs to the root shell so every page paints in
+            the persisted light/dark mode before AppShell hydrates. Future UI
+            work should preserve this tiny fail-soft script to avoid flashes. */}
         <script
           dangerouslySetInnerHTML={{
             __html:

@@ -2,42 +2,64 @@
 
 :root {
   color-scheme: light;
-  --background: #f7f3ec;
-  --background-elevated: #fdfbf7;
-  --surface: #fffdf9;
-  --surface-muted: #efe7dc;
-  --foreground: #202420;
-  --muted-foreground: #69645d;
-  --card: rgba(255, 253, 249, 0.94);
-  --border: rgba(46, 42, 36, 0.14);
-  --accent: #667d5f;
-  --accent-strong: #516849;
-  --accent-foreground: #fbfff7;
-  --warm-accent: #b97948;
-  --success: #2f7d5d;
-  --danger: #b94f5b;
-  --ring: rgba(102, 125, 95, 0.32);
-  --shadow: 0 16px 36px -26px rgba(32, 36, 32, 0.42);
+  --background: #f8fafc;
+  --surface: #ffffff;
+  --surface-muted: #eef2f7;
+  --surface-container-low: #f1f5f9;
+  --surface-container-high: #e2e8f0;
+  --card: rgba(255, 255, 255, 0.96);
+  --border: rgba(15, 23, 42, 0.12);
+  --border-strong: rgba(15, 23, 42, 0.22);
+  --foreground: #0f172a;
+  --muted-foreground: #64748b;
+  --primary: #1d4ed8;
+  --primary-container: #dbeafe;
+  --on-primary-container: #1e3a8a;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --error: #ef4444;
+  --info: #0284c7;
+  --ring: rgba(37, 99, 235, 0.28);
+  --shadow: 0 18px 44px -34px rgba(15, 23, 42, 0.35);
+
+  /* Compatibility aliases keep older components token-driven while the new
+     design-system names above become the source of truth for this UI scope. */
+  --background-elevated: var(--surface);
+  --accent: var(--primary);
+  --accent-strong: #1e40af;
+  --accent-foreground: #ffffff;
+  --warm-accent: var(--warning);
+  --danger: var(--error);
 }
 
 .dark {
   color-scheme: dark;
-  --background: #151815;
-  --background-elevated: #1b201c;
-  --surface: #202720;
-  --surface-muted: #2b3129;
-  --foreground: #f4efe7;
-  --muted-foreground: #b7b0a6;
-  --card: rgba(31, 38, 31, 0.92);
-  --border: rgba(226, 214, 197, 0.16);
-  --accent: #9bb58f;
-  --accent-strong: #bdd0b3;
-  --accent-foreground: #172015;
-  --warm-accent: #d5a16e;
-  --success: #8bc3a1;
-  --danger: #e28b93;
-  --ring: rgba(155, 181, 143, 0.38);
-  --shadow: 0 18px 44px -30px rgba(0, 0, 0, 0.72);
+  --background: #121212;
+  --surface: #1e1e1e;
+  --surface-muted: #262626;
+  --surface-container-low: #1c1c1c;
+  --surface-container-high: #2c2c2c;
+  --card: rgba(30, 30, 30, 0.94);
+  --border: rgba(229, 229, 229, 0.12);
+  --border-strong: rgba(229, 229, 229, 0.22);
+  --foreground: #e5e7eb;
+  --muted-foreground: #a3a3a3;
+  --primary: #60a5fa;
+  --primary-container: #1e3a8a;
+  --on-primary-container: #dbeafe;
+  --success: #34d399;
+  --warning: #fbbf24;
+  --error: #f87171;
+  --info: #38bdf8;
+  --ring: rgba(96, 165, 250, 0.36);
+  --shadow: 0 22px 58px -34px rgba(0, 0, 0, 0.86);
+
+  --background-elevated: var(--surface-container-low);
+  --accent: var(--primary);
+  --accent-strong: #93c5fd;
+  --accent-foreground: #07111f;
+  --warm-accent: var(--warning);
+  --danger: var(--error);
 }
 
 * { box-sizing: border-box; }
@@ -45,18 +67,100 @@ html { scroll-behavior: smooth; }
 body {
   min-height: 100vh;
   margin: 0;
-  background: linear-gradient(180deg, var(--background-elevated) 0%, var(--background) 42rem);
+  overflow-x: clip;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-container-low) 42%, var(--background)) 0%, var(--background) 36rem),
+    var(--background);
   color: var(--foreground);
-  font-family: Inter, "SF Pro Text", "Segoe UI", Arial, sans-serif;
+  font-family: var(--font-public-sans), "Public Sans", "SF Pro Text", "Segoe UI", Arial, sans-serif;
   letter-spacing: 0;
 }
 
 a { color: inherit; text-decoration: none; }
+button, input, select, textarea { font: inherit; }
+img, video, iframe, canvas, svg { max-width: 100%; }
 
 .line-clamp-2,.line-clamp-3 { display:-webkit-box; -webkit-box-orient: vertical; overflow:hidden; }
 .line-clamp-2 { -webkit-line-clamp:2; }
 .line-clamp-3 { -webkit-line-clamp:3; }
 
+/* Shared research-terminal affordances: these helpers keep dense dashboard
+   cards readable across Channel Explorer, saved channels, and attempt
+   timelines. They deliberately use intrinsic grid sizing instead of viewport
+   breakpoints so cards do not collapse when nested inside narrow page columns. */
+.metric-tile {
+  min-width: 0;
+  border: 1px solid var(--border);
+  background: var(--surface-container-low);
+  border-radius: 0.5rem;
+  padding: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+.panel-muted {
+  min-width: 0;
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  border-radius: 0.5rem;
+  overflow-wrap: anywhere;
+}
+
+.terminal-rule {
+  background-image: linear-gradient(90deg, color-mix(in srgb, var(--primary) 42%, transparent), transparent);
+}
+
+/* Responsive layout guards for dense SaaS panels. Future UI work should reuse
+   these classes for metrics, filters, chips, and action rows instead of adding
+   fixed-width grids that can overflow mobile/tablet cards. */
+.metric-grid,
+.control-grid {
+  display: grid;
+  min-width: 0;
+  gap: 0.75rem;
+}
+
+.metric-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 8.5rem), 1fr));
+}
+
+.control-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+}
+
+.chip-row,
+.action-row {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.chip-row > *,
+.metadata-chip {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.action-row {
+  align-items: center;
+}
+
+.action-row > * {
+  min-width: 0;
+}
+
+.text-anywhere {
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+@media (width < 640px) {
+  .action-row > a,
+  .action-row > button {
+    flex: 1 1 100%;
+  }
+}
+
 ::selection {
-  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  background: color-mix(in srgb, var(--primary) 28%, transparent);
 }

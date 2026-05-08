@@ -1,0 +1,28 @@
+⨯ Error [PrismaClientKnownRequestError]: 
+Invalid `prisma.videoSource.findMany()` invocation:
+
+
+Can't reach database server at aws-0-eu-west-1.pooler.supabase.com
+    at async L (F:\discovery\dailymotion-video-discovery\.next\server\chunks\ssr\_0cj0cww._.js:62:88109)
+    at async r (F:\discovery\dailymotion-video-discovery\.next\server\chunks\ssr\[root-of-the-server]__03dz-9j._.js:1:5824) {
+  code: 'P1001',
+  meta: {
+    modelName: 'VideoSource',
+    driverAdapterError: Error [DriverAdapterError]: DatabaseNotReachable
+        at W.onError (F:\discovery\dailymotion-video-discovery\.next\server\chunks\_03dg5ec._.js:1:11636)
+        at W.performIO (F:\discovery\dailymotion-video-discovery\.next\server\chunks\_03dg5ec._.js:1:11577)
+        at async W.queryRaw (F:\discovery\dailymotion-video-discovery\.next\server\chunks\_03dg5ec._.js:1:8163) {
+      [cause]: [Object]
+    }
+  },
+  clientVersion: '7.8.0',
+  digest: '3082973769'
+}
+⨯ Error: Connection terminated due to connection timeout
+    at async W.performIO (F:\discovery\dailymotion-video-discovery\.next\server\chunks\_03dg5ec._.js:1:11381)
+    at async W.queryRaw (F:\discovery\dailymotion-video-discovery\.next\server\chunks\_03dg5ec._.js:1:8163) {
+  clientVersion: '7.8.0',
+  digest: '461287491',
+  [cause]: Error: Connection terminated unexpectedly
+      at ignore-listed frames
+}

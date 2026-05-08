@@ -6,7 +6,7 @@ import { Card } from "@/components/ui/card";
 import type { ChannelPersistenceMode, FetchHistoryEntry } from "@/types/channel-fetch";
 
 function Badge({ label }: { label: string }) {
-  return <span className="rounded-md border border-[var(--border)] bg-[var(--surface-muted)] px-2 py-1 text-xs font-bold uppercase text-[var(--muted-foreground)]">{label}</span>;
+  return <span className="metadata-chip rounded-md border border-[var(--border)] bg-[var(--surface-container-low)] px-2 py-1 text-xs font-black uppercase text-[var(--muted-foreground)]">{label}</span>;
 }
 
 export function ChannelFetchHistoryPanel({
@@ -30,60 +30,63 @@ export function ChannelFetchHistoryPanel({
     : persistenceWarning ?? "Persistence unavailable: history may reset after restart/deploy.";
 
   return (
-    <Card className="space-y-4">
-      <div>
-        <h2 className="flex items-center gap-2 text-lg font-bold">
-          <History className="h-4 w-4 text-[var(--accent)]" aria-hidden="true" />
-          Fetch History
-        </h2>
+    <Card className="space-y-5">
+      <div className="flex items-start gap-3">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-[var(--border)] bg-[color-mix(in_srgb,var(--primary)_12%,transparent)] text-[var(--primary)]">
+          <History className="h-5 w-5" aria-hidden="true" />
+        </span>
+        <div className="min-w-0">
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-[var(--muted-foreground)]">Fetch Attempts / History</p>
+          <h2 className="mt-1 text-xl font-black">Attempt Timeline</h2>
         <p className="mt-1 max-w-3xl text-sm leading-6 text-[var(--muted-foreground)]">
           History tracks fetch runs and resume checkpoints. Result filters only filter the current collected manifest.
           Fetch attempts are numbered so you can track what was collected in each run.
         </p>
+        </div>
       </div>
 
-      <div className="rounded-md border border-[var(--border)] bg-[var(--surface-muted)] p-3 text-sm leading-6 text-[var(--muted-foreground)]">
+      <div className="panel-muted p-3 text-sm leading-6 text-[var(--muted-foreground)]">
         {persistenceCopy}
       </div>
 
       {history.length === 0 ? (
-        <div className="rounded-md border border-dashed border-[var(--border)] bg-[var(--surface)] p-4 text-sm text-[var(--muted-foreground)]">
+        <div className="rounded-md border border-dashed border-[var(--border)] bg-[var(--surface-container-low)] p-4 text-sm text-[var(--muted-foreground)]">
           No fetch runs for this source are available yet.
         </div>
       ) : (
         <div className="grid gap-3">
           {history.map((entry) => (
-            <div key={entry.id} className="grid gap-3 rounded-md border border-[var(--border)] bg-[var(--background-elevated)] p-4 lg:grid-cols-[1fr_auto]">
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                <div>
+            <div key={entry.id} className="grid min-w-0 gap-3 rounded-md border border-[var(--border)] bg-[var(--surface-container-low)] p-4 transition hover:border-[var(--border-strong)] 2xl:grid-cols-[minmax(0,1fr)_auto]">
+              <div className="metric-grid">
+                <div className="metric-tile">
                   <p className="text-xs font-semibold uppercase text-[var(--muted-foreground)]">Attempt</p>
                   <p className="mt-1 text-sm font-bold">Attempt #{entry.attemptNumber}</p>
                 </div>
-                <div>
+                <div className="metric-tile">
                   <p className="text-xs font-semibold uppercase text-[var(--muted-foreground)]">Profile</p>
                   <p className="mt-1 text-sm font-bold">{entry.fetchProfile}</p>
                 </div>
-                <div>
+                <div className="metric-tile">
                   <p className="text-xs font-semibold uppercase text-[var(--muted-foreground)]">Status</p>
                   <p className="mt-1 text-sm font-bold">{entry.completenessStatus}</p>
                 </div>
-                <div>
+                <div className="metric-tile">
                   <p className="text-xs font-semibold uppercase text-[var(--muted-foreground)]">Added / duplicates</p>
                   <p className="mt-1 text-sm font-bold">{entry.uniqueItemsCollected} / {entry.duplicateCount}</p>
                 </div>
-                <div>
+                <div className="metric-tile">
                   <p className="text-xs font-semibold uppercase text-[var(--muted-foreground)]">Pages</p>
                   <p className="mt-1 text-sm font-bold">{entry.pagesFetched}</p>
                 </div>
-                <div>
+                <div className="metric-tile">
                   <p className="text-xs font-semibold uppercase text-[var(--muted-foreground)]">Windows</p>
                   <p className="mt-1 text-sm font-bold">{entry.windowsProcessed} done, {entry.cappedWindowCount} capped, {entry.failedWindowCount} failed</p>
                 </div>
-                <div className="sm:col-span-2 lg:col-span-4">
+                <div className="metric-tile">
                   <p className="text-xs font-semibold uppercase text-[var(--muted-foreground)]">Current resume checkpoint</p>
-                  <p className="mt-1 break-all text-sm font-bold">{entry.currentResumeCheckpoint ?? "Unavailable"}</p>
+                  <p className="text-anywhere mt-1 text-sm font-bold">{entry.currentResumeCheckpoint ?? "Unavailable"}</p>
                 </div>
-                <div className="flex flex-wrap gap-2 sm:col-span-2 lg:col-span-4">
+                <div className="chip-row sm:col-span-2">
                   <Badge label={entry.persistence === "database" ? "Persisted" : "Runtime"} />
                   <Badge label={entry.persistenceType ?? "Temporary"} />
                   {entry.resumable ? <Badge label="Resumable" /> : null}
@@ -94,7 +97,7 @@ export function ChannelFetchHistoryPanel({
                   {entry.status === "stopped" ? <Badge label="Stopped" /> : null}
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="action-row items-center 2xl:justify-end">
                 {entry.resumable ? (
                   <Button type="button" variant={entry.id === activeJobId ? "secondary" : "primary"} onClick={() => onResume(entry.id)} disabled={loading}>
                     <Play className="h-4 w-4" aria-hidden="true" />

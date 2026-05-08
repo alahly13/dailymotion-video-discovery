@@ -1,0 +1,2 @@
+⚠ Slow filesystem detected. The benchmark took 1756ms. If F:\discovery\dailymotion-video-discovery\.next/dev is a network drive, consider moving it to a local folder.
+See more: https://nextjs.org/docs/app/guides/local-development

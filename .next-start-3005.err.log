@@ -1,0 +1,44 @@
+⨯ Error [PrismaClientKnownRequestError]: 
+Invalid `prisma.videoSource.findMany()` invocation:
+
+
+Can't reach database server at aws-0-eu-west-1.pooler.supabase.com
+    at async L (F:\discovery\dailymotion-video-discovery\.next\server\chunks\ssr\_0cj0cww._.js:62:88109)
+    at async r (F:\discovery\dailymotion-video-discovery\.next\server\chunks\ssr\[root-of-the-server]__03dz-9j._.js:1:5838) {
+  code: 'P1001',
+  meta: {
+    modelName: 'VideoSource',
+    driverAdapterError: Error [DriverAdapterError]: DatabaseNotReachable
+        at F.onError (F:\discovery\dailymotion-video-discovery\.next\server\chunks\ssr\_0cj0cww._.js:62:70405)
+        at F.performIO (F:\discovery\dailymotion-video-discovery\.next\server\chunks\ssr\_0cj0cww._.js:62:70346)
+        at async F.queryRaw (F:\discovery\dailymotion-video-discovery\.next\server\chunks\ssr\_0cj0cww._.js:62:66932) {
+      [cause]: [Object]
+    }
+  },
+  clientVersion: '7.8.0',
+  digest: '710963076'
+}
+⨯ Error: timeout exceeded when trying to connect
+    at async F.performIO (F:\discovery\dailymotion-video-discovery\.next\server\chunks\ssr\_0cj0cww._.js:62:70150)
+    at async F.queryRaw (F:\discovery\dailymotion-video-discovery\.next\server\chunks\ssr\_0cj0cww._.js:62:66932) {
+  clientVersion: '7.8.0',
+  digest: '3456502621'
+}
+⨯ Error [PrismaClientKnownRequestError]: 
+Invalid `prisma.videoSource.findMany()` invocation:
+
+
+
+    at async L (F:\discovery\dailymotion-video-discovery\.next\server\chunks\ssr\_0cj0cww._.js:62:88109)
+    at async r (F:\discovery\dailymotion-video-discovery\.next\server\chunks\ssr\[root-of-the-server]__03dz-9j._.js:1:5838) {
+  code: 'ETIMEDOUT',
+  meta: { modelName: 'VideoSource' },
+  clientVersion: '7.8.0',
+  digest: '73718596'
+}
+⨯ Error: timeout exceeded when trying to connect
+    at async F.performIO (F:\discovery\dailymotion-video-discovery\.next\server\chunks\ssr\_0cj0cww._.js:62:70150)
+    at async F.queryRaw (F:\discovery\dailymotion-video-discovery\.next\server\chunks\ssr\_0cj0cww._.js:62:66932) {
+  clientVersion: '7.8.0',
+  digest: '3456502621'
+}

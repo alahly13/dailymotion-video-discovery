@@ -81,17 +81,17 @@ export function ChannelFetchConfigPanel({
             </p>
           </div>
         </div>
-        <div className="action-row">
-          <Button type="button" variant="ghost" onClick={onReset} disabled={loading}>
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+          <Button type="button" variant="ghost" onClick={onReset} disabled={loading} className="flex-1 sm:flex-none">
             <RotateCcw className="h-4 w-4" aria-hidden="true" />
             Reset
           </Button>
-          <Button type="button" onClick={onStart} disabled={loading}>
+          <Button type="button" onClick={onStart} disabled={loading} className="flex-1 sm:flex-none">
             <Play className="h-4 w-4" aria-hidden="true" />
             {primaryLabel}
           </Button>
           {hasSavedAttempts ? (
-            <Button type="button" variant="secondary" onClick={onStartNew} disabled={loading}>
+            <Button type="button" variant="secondary" onClick={onStartNew} disabled={loading} className="flex-1 sm:flex-none">
               <Play className="h-4 w-4" aria-hidden="true" />
               Start New Fetch
             </Button>
@@ -105,7 +105,7 @@ export function ChannelFetchConfigPanel({
         {hasSavedAttempts ? <p>Start New Fetch creates a separate new attempt from the beginning and does not delete the saved channel manifest.</p> : null}
       </div>
 
-      <div className="control-grid">
+      <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
         {fetchProfiles.map(([value, label]) => (
           <button
             key={value}

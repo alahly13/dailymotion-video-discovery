@@ -107,21 +107,21 @@ export function ChannelWindowFeedbackPanel({
               const running = window.status === "running";
               return (
                 <div key={window.id} className={`space-y-3 rounded-md border p-4 ${statusClasses(window.status)}`}>
-                  <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-0">
                       <h3 className="flex min-w-0 items-center gap-2 text-base font-black">
-                        <Icon className={`h-4 w-4 text-[var(--accent)] ${running ? "animate-spin" : ""}`} aria-hidden="true" />
-                        <span className="text-anywhere min-w-0">{windowTitle(window)}</span>
+                        <Icon className={`h-4 w-4 shrink-0 text-[var(--accent)] ${running ? "animate-spin" : ""}`} aria-hidden="true" />
+                        <span className="break-words min-w-0">{windowTitle(window)}</span>
                       </h3>
-                      <p className="mt-1 text-sm text-[var(--muted-foreground)]">Window: {shortDate(window.windowStart)} -&gt; {shortDate(window.windowEnd)}</p>
+                      <p className="mt-1 text-sm text-[var(--muted-foreground)] break-words">Window: {shortDate(window.windowStart)} -&gt; {shortDate(window.windowEnd)}</p>
                     </div>
-                    <div className="flex flex-wrap justify-end gap-2">
-                      <span className="rounded-md border border-[var(--border)] bg-[var(--surface-container-high)] px-2 py-1 text-xs font-black uppercase text-[var(--muted-foreground)]">{window.status}</span>
-                      {window.executionOrder ? <span className="rounded-md border border-[var(--border)] bg-[var(--surface-container-high)] px-2 py-1 text-xs font-black uppercase text-[var(--muted-foreground)]">Exec #{window.executionOrder}</span> : null}
+                    <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                      <span className="rounded-md border border-[var(--border)] bg-[var(--surface-container-high)] px-2 py-1 text-xs font-black uppercase text-[var(--muted-foreground)] whitespace-nowrap">{window.status}</span>
+                      {window.executionOrder ? <span className="rounded-md border border-[var(--border)] bg-[var(--surface-container-high)] px-2 py-1 text-xs font-black uppercase text-[var(--muted-foreground)] whitespace-nowrap">Exec #{window.executionOrder}</span> : null}
                     </div>
                   </div>
 
-                  <div className="grid gap-2 text-sm text-[var(--muted-foreground)] sm:grid-cols-2">
+                  <div className="grid gap-2 text-sm text-[var(--muted-foreground)] sm:grid-cols-2 break-words">
                     <span>Pages fetched: <strong className="text-[var(--foreground)]">{window.pagesFetched}</strong></span>
                     <span>Videos returned: <strong className="text-[var(--foreground)]">{window.itemsFound}</strong></span>
                     <span>Unique added: <strong className="text-[var(--foreground)]">{window.uniqueItemsAdded}</strong></span>

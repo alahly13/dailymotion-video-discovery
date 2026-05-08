@@ -27,21 +27,23 @@ export function ChannelInputPanel({ value, loading, canStop, onChange, onAnalyze
           </p>
         </div>
       </div>
-      <div className="grid min-w-0 gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
+      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
         <Input
           value={value}
           onChange={(event) => onChange(event.target.value)}
           placeholder="https://www.dailymotion.com/channel/news or username"
-          className="font-mono"
+          className="font-mono flex-1 min-w-0"
         />
-        <Button type="button" onClick={onAnalyze} disabled={loading}>
-          <WandSparkles className="h-4 w-4" aria-hidden="true" />
-          Analyze
-        </Button>
-        <Button type="button" variant="danger" onClick={onStop} disabled={!canStop}>
-          <Square className="h-4 w-4" aria-hidden="true" />
-          Stop
-        </Button>
+        <div className="flex shrink-0 flex-wrap gap-3">
+          <Button type="button" onClick={onAnalyze} disabled={loading} className="flex-1 sm:flex-none">
+            <WandSparkles className="h-4 w-4" aria-hidden="true" />
+            Analyze
+          </Button>
+          <Button type="button" variant="danger" onClick={onStop} disabled={!canStop} className="flex-1 sm:flex-none">
+            <Square className="h-4 w-4" aria-hidden="true" />
+            Stop
+          </Button>
+        </div>
       </div>
     </Card>
   );

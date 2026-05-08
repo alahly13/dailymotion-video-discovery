@@ -35,20 +35,20 @@ export function ChannelManifestSearchPanel({
 }) {
   return (
     <Card className="space-y-5" id="manifest-search">
-      <div className="flex flex-col gap-3 2xl:flex-row 2xl:items-start 2xl:justify-between">
-        <div className="flex items-start gap-3">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div className="flex items-start gap-3 min-w-0">
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-[var(--border)] bg-[color-mix(in_srgb,var(--primary)_12%,transparent)] text-[var(--primary)]">
             <Search className="h-5 w-5" aria-hidden="true" />
           </span>
           <div className="min-w-0">
             <p className="text-xs font-black uppercase tracking-[0.18em] text-[var(--muted-foreground)]">Search Current Results</p>
             <h2 className="mt-1 text-xl font-black">Manifest Search</h2>
-          <p className="mt-1 max-w-3xl text-sm leading-6 text-[var(--muted-foreground)]">
-            Search looks inside videos already collected. Filters refine the searched results. Neither action calls Dailymotion.
-          </p>
+            <p className="mt-1 max-w-3xl text-sm leading-6 text-[var(--muted-foreground)]">
+              Search looks inside videos already collected. Filters refine the searched results. Neither action calls Dailymotion.
+            </p>
           </div>
         </div>
-        <div className="text-anywhere rounded-md border border-[color-mix(in_srgb,var(--success)_28%,transparent)] bg-[color-mix(in_srgb,var(--success)_10%,transparent)] px-3 py-2 text-xs font-black uppercase text-[var(--success)]">
+        <div className="self-start break-words rounded-md border border-[color-mix(in_srgb,var(--success)_28%,transparent)] bg-[color-mix(in_srgb,var(--success)_10%,transparent)] px-3 py-2 text-xs font-black uppercase text-[var(--success)]">
           Search does not call Dailymotion
         </div>
       </div>
@@ -68,16 +68,16 @@ export function ChannelManifestSearchPanel({
         </label>
       </div>
 
-      <div className="chip-row items-center">
-        <label className="inline-flex min-h-10 items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface-container-low)] px-3 text-sm font-semibold text-[var(--muted-foreground)]">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:flex-wrap">
+        <label className="inline-flex min-h-10 shrink-0 flex-1 sm:flex-none items-center justify-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface-container-low)] px-3 text-sm font-semibold text-[var(--muted-foreground)]">
           <input type="checkbox" checked={exactPhrase} onChange={(event) => onExactPhraseChange(event.target.checked)} className="h-4 w-4 accent-[var(--accent)]" />
           Exact phrase
         </label>
-        <label className="inline-flex min-h-10 items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface-container-low)] px-3 text-sm font-semibold text-[var(--muted-foreground)]">
+        <label className="inline-flex min-h-10 shrink-0 flex-1 sm:flex-none items-center justify-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface-container-low)] px-3 text-sm font-semibold text-[var(--muted-foreground)]">
           <input type="checkbox" checked={fuzzy} onChange={(event) => onFuzzyChange(event.target.checked)} className="h-4 w-4 accent-[var(--accent)]" />
           Typo tolerant
         </label>
-        <span className="text-anywhere text-sm font-semibold text-[var(--muted-foreground)]">Searching within current manifest only: {sourceLabel}</span>
+        <span className="break-words text-sm font-semibold text-[var(--muted-foreground)]">Searching within current manifest only: {sourceLabel}</span>
       </div>
 
       <div className="metric-grid text-sm text-[var(--muted-foreground)]">

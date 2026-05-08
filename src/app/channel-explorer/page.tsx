@@ -400,11 +400,11 @@ export default function ChannelExplorerPage() {
         </div>
 
         <div className="space-y-5">
-          <div className="metric-grid rounded-lg border border-[var(--border)] bg-[var(--card)] p-4 shadow-[var(--shadow)]">
+          <div className="grid gap-4 min-w-0 sm:grid-cols-2 md:grid-cols-3 rounded-lg border border-[var(--border)] bg-[var(--card)] p-4 shadow-[var(--shadow)]">
             {summaryStats.map(([label, value]) => (
-              <div key={label} className="metric-tile">
-                <p className="text-[11px] font-black uppercase tracking-[0.12em] text-[var(--muted-foreground)]">{label}</p>
-                <p className="text-anywhere mt-1 text-lg font-black">{value}</p>
+              <div key={label} className="min-w-0 flex flex-col rounded-md border border-[var(--border)] bg-[var(--surface-container-low)] p-3 hover:border-[var(--border-strong)] transition-colors break-words">
+                <p className="truncate text-[10px] font-black uppercase tracking-[0.12em] text-[var(--muted-foreground)]">{label}</p>
+                <p className="mt-1 break-words text-base font-black sm:text-lg">{value}</p>
               </div>
             ))}
           </div>
@@ -436,7 +436,7 @@ export default function ChannelExplorerPage() {
           </div>
           <p className="text-sm text-[var(--muted-foreground)]">{filteredItems.length} shown / {searchedItems.length} searched / {selectedManifest?.items.length ?? 0} collected</p>
         </div>
-        <div className="action-row">
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
           {(["combined", "by-attempt", "current-attempt"] as const).map((mode) => (
             <button
               key={mode}
@@ -480,7 +480,7 @@ export default function ChannelExplorerPage() {
             Exports use the manifest items already loaded in this page state. Opening the saved channel manifest reloads persisted metadata only; it does not start a Dailymotion fetch.
           </p>
         </div>
-        <div className="action-row">
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
           {metadata?.persistedSourceId ? (
             <Link href={`/channels/${metadata.persistedSourceId}`} className="rounded-md border border-[var(--border)] bg-[var(--surface-container-low)] px-3 py-2 text-center text-sm font-bold text-[var(--muted-foreground)] transition hover:bg-[var(--surface-container-high)]">
               View saved channel page

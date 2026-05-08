@@ -15,9 +15,9 @@ function formatPercent(value: number | null | undefined) {
 
 function Metric({ label, value, emphasis = false }: { label: string; value: string | number; emphasis?: boolean }) {
   return (
-    <div className="metric-tile">
-      <p className="text-[11px] font-black uppercase tracking-[0.12em] text-[var(--muted-foreground)]">{label}</p>
-      <p className={emphasis ? "mt-1 break-words text-lg font-black" : "mt-1 break-words text-sm font-bold"}>{value}</p>
+    <div className="min-w-0 rounded-md border border-[var(--border)] bg-[var(--surface-container-low)] p-3 hover:border-[var(--border-strong)] transition-colors">
+      <p className="truncate text-[10px] font-black uppercase tracking-[0.12em] text-[var(--muted-foreground)]">{label}</p>
+      <p className={emphasis ? "mt-1 truncate text-base sm:text-lg font-black" : "mt-1 truncate text-sm font-bold"}>{value}</p>
     </div>
   );
 }
@@ -59,8 +59,8 @@ export function ChannelMetadataPanel({
           <div className="min-w-0 flex-1">
             <p className="text-xs font-black uppercase tracking-[0.18em] text-[var(--muted-foreground)]">Channel Metadata</p>
             <h2 className="text-anywhere mt-1 line-clamp-2 text-xl sm:text-2xl font-black">{sourceName}</h2>
-            <div className="chip-row mt-2">
-              <span className="metadata-chip inline-flex items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--surface-container-low)] px-2 py-1 text-[11px] font-black uppercase text-[var(--muted-foreground)]">
+            <div className="mt-2 flex flex-wrap gap-2">
+              <span className="metadata-chip inline-flex items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--surface-container-low)] px-2 py-1 text-[10px] sm:text-[11px] font-black uppercase text-[var(--muted-foreground)]">
                 <ShieldCheck className="h-3.5 w-3.5 text-[var(--success)]" aria-hidden="true" />
                 Public metadata
               </span>
@@ -90,7 +90,7 @@ export function ChannelMetadataPanel({
           Analyze or fetch a channel to load public source metadata.
         </div>
       ) : (
-        <div className="metric-grid">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           <Metric label="Reported total" value={metadata.reportedTotalFromApi ?? "Unavailable"} emphasis />
           <Metric label="Collected unique" value={coverage?.collectedUniqueVideos ?? 0} emphasis />
           <Metric label="Estimated remaining" value={coverage?.estimatedRemainingVideos ?? "Unavailable"} emphasis />
@@ -99,9 +99,9 @@ export function ChannelMetadataPanel({
           <Metric label="Username" value={display(metadata.username ?? metadata.handle)} />
           <Metric label="Display name" value={display(metadata.displayName)} />
           <Metric label="Language / country" value={display([metadata.language, metadata.country].filter(Boolean).join(" / "))} />
-          <div className="metric-tile">
-            <p className="text-[11px] font-black uppercase tracking-[0.12em] text-[var(--muted-foreground)]">Canonical URL</p>
-            <p className="text-anywhere mt-1 text-sm font-bold">{display(metadata.canonicalUrl)}</p>
+          <div className="min-w-0 rounded-md border border-[var(--border)] bg-[var(--surface-container-low)] p-3 hover:border-[var(--border-strong)] transition-colors">
+            <p className="truncate text-[10px] font-black uppercase tracking-[0.12em] text-[var(--muted-foreground)]">Canonical URL</p>
+            <p className="mt-1 truncate text-sm font-bold">{display(metadata.canonicalUrl)}</p>
           </div>
           <Metric label="Coverage confidence" value={coverage?.coverageConfidence ?? "unknown"} />
           <Metric label="Last metadata refresh" value={display(metadata.reportedTotalCheckedAt)} />
